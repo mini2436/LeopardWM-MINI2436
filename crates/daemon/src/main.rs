@@ -1365,6 +1365,7 @@ fn setup_gestures(
 /// Initialize the system tray icon and bridge its events into the event loop.
 fn setup_tray(
     config: &Config,
+    initial_workspace: u8,
     event_tx: &mpsc::Sender<DaemonEvent>,
     thread_handles: &mut Vec<std::thread::JoinHandle<()>>,
 ) -> Option<tray::TrayManager> {
@@ -1382,7 +1383,7 @@ fn setup_tray(
     }
 
     let initial_toggles = quick_toggle_state(config);
-    match tray::TrayManager::new(tray_sync_tx, initial_toggles) {
+    match tray::TrayManager::new(tray_sync_tx, initial_toggles, initial_workspace) {
         Ok(manager) => {
             info!("System tray icon initialized");
             Some(manager)
@@ -3105,7 +3106,16 @@ async fn main() -> Result<()> {
     };
 
     // Initialize system tray icon
-    let tray_manager = setup_tray(&config, &event_tx, &mut thread_handles);
+    let initial_tray_workspace = {
+        let state = state.lock().await;
+        (state.active_workspace_idx(state.focused_monitor) + 1) as u8
+    };
+    let tray_manager = setup_tray(
+        &config,
+        initial_tray_workspace,
+        &event_tx,
+        &mut thread_handles,
+    );
 
     // Update checker — daily GitHub Releases poll, opt-out via behavior.check_for_updates.
     let update_check_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));

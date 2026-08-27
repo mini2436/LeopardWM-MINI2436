@@ -1340,6 +1340,26 @@ const STICKY_COMPOSITOR_CLASSES: &[&str] = &[
     "CASCADIA_HOSTING_WINDOW_CLASS", // Windows Terminal
 ];
 
+/// Shell/WinUI hosts that can accept the animation's final SetWindowPos and
+/// then restore their launch-time rectangle a few milliseconds later. This is
+/// most visible with Win+I: the layout reserves a column for Settings while
+/// the ApplicationFrameWindow itself jumps back to the right-hand launch
+/// position. These need a later geometry re-assertion in addition to the
+/// compositor size nudge above.
+const DELAYED_GEOMETRY_CLASSES: &[&str] = &[
+    "ApplicationFrameWindow",       // Settings and legacy UWP host windows
+    "WinUIDesktopWin32WindowClass", // unpackaged/desktop WinUI 3 windows
+];
+
+fn needs_landing_nudge(class_name: &str) -> bool {
+    STICKY_COMPOSITOR_CLASSES.contains(&class_name)
+        || DELAYED_GEOMETRY_CLASSES.contains(&class_name)
+}
+
+fn needs_delayed_geometry_settle(class_name: &str) -> bool {
+    DELAYED_GEOMETRY_CLASSES.contains(&class_name)
+}
+
 /// Read the class name of a window. Returns empty string on failure.
 fn window_class_name(hwnd: HWND) -> String {
     let mut buf: [u16; 256] = [0; 256];
@@ -1373,7 +1393,7 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
             }
         }
         let class = window_class_name(t.hwnd);
-        if !STICKY_COMPOSITOR_CLASSES.iter().any(|c| *c == class) {
+        if !needs_landing_nudge(&class) {
             return false;
         }
         let flags = SWP_NOZORDER | SWP_NOACTIVATE;
@@ -1413,7 +1433,16 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
         true
     }
 
-    let affected: Vec<&NudgeTarget> = targets.iter().filter(|target| nudge_once(target)).collect();
+    let affected: Vec<(&NudgeTarget, bool)> = targets
+        .iter()
+        .filter_map(|target| {
+            let class = window_class_name(target.hwnd);
+            if !nudge_once(target) {
+                return None;
+            }
+            Some((target, needs_delayed_geometry_settle(&class)))
+        })
+        .collect();
     if affected.is_empty() {
         return;
     }
@@ -1425,19 +1454,25 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
         let _ = DwmFlush();
     }
     std::thread::sleep(std::time::Duration::from_millis(16));
-    for target in affected {
-        unsafe {
-            let mut rect = RECT::default();
-            if GetWindowRect(target.hwnd, &mut rect).is_err()
-                || rect.left != target.x
-                || rect.top != target.y
-                || rect.right - rect.left != target.w
-                || rect.bottom - rect.top != target.h
-            {
-                continue;
+    for (target, _) in &affected {
+        // Do not require the window to still be at the target rectangle here.
+        // A delayed shell-owned jump is exactly the failure this pass must
+        // correct. nudge_once revalidates both HWND and class before moving it.
+        let _ = nudge_once(target);
+    }
+
+    // ApplicationFrameHost/WinUI can apply their launch placement after the
+    // first compositor tick. Give that initialization another short interval,
+    // then make the layout rectangle authoritative one final time. This runs
+    // only after an actual animation landing and only for the two WinUI host
+    // classes, so routine focus/layout refreshes pay no delay.
+    if affected.iter().any(|(_, delayed)| *delayed) {
+        std::thread::sleep(std::time::Duration::from_millis(48));
+        for (target, delayed) in affected {
+            if delayed {
+                let _ = nudge_once(target);
             }
         }
-        let _ = nudge_once(target);
     }
 }
 
@@ -1739,6 +1774,20 @@ pub(crate) fn invisible_border_insets(hwnd: HWND) -> (i32, i32, i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn landing_nudge_classes_cover_compositors_and_winui_geometry() {
+        assert!(needs_landing_nudge("Chrome_WidgetWin_1"));
+        assert!(needs_landing_nudge("ApplicationFrameWindow"));
+        assert!(needs_landing_nudge("WinUIDesktopWin32WindowClass"));
+        assert!(!needs_landing_nudge("Notepad"));
+
+        assert!(needs_delayed_geometry_settle("ApplicationFrameWindow"));
+        assert!(needs_delayed_geometry_settle(
+            "WinUIDesktopWin32WindowClass"
+        ));
+        assert!(!needs_delayed_geometry_settle("Chrome_WidgetWin_1"));
+    }
 
     #[test]
     fn test_visible_and_frame_rects_round_trip_with_insets() {

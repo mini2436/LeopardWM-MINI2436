@@ -157,6 +157,7 @@ pub const PLACEMENT_IN_COLUMN: u8 = 1;
 /// and mutexes, with `PostThreadMessageW` to wake the thread.
 struct SharedState {
     use_chinese: AtomicBool,
+    active_workspace: AtomicU8,
     paused: AtomicBool,
     tooltip_text: Mutex<String>,
     active_border: AtomicBool,
@@ -241,9 +242,11 @@ impl TrayManager {
     pub fn new(
         event_sender: mpsc::Sender<TrayEvent>,
         initial: QuickToggleState,
+        initial_workspace: u8,
     ) -> Result<Self, TrayError> {
         let shared = Arc::new(SharedState {
             use_chinese: AtomicBool::new(use_chinese(initial.language)),
+            active_workspace: AtomicU8::new(initial_workspace.clamp(1, 9)),
             paused: AtomicBool::new(false),
             tooltip_text: Mutex::new(String::from(if use_chinese(initial.language) {
                 "LeopardWM - 平铺窗口管理器"
@@ -396,6 +399,9 @@ impl TrayManager {
         if let Ok(mut text) = self.shared.tooltip_text.lock() {
             *text = tooltip;
         }
+        self.shared
+            .active_workspace
+            .store(active_workspace.clamp(1, 9), Ordering::Relaxed);
         // Wake the message-loop thread to apply the new tooltip.
         unsafe {
             win32_msg::PostThreadMessageW(
@@ -493,7 +499,8 @@ fn run_tray_thread(
     // Enable dark mode for native context menus before any menu is created.
     enable_dark_mode_menus();
 
-    let (tray, items) = match build_tray(&initial) {
+    let initial_workspace = shared.active_workspace.load(Ordering::Relaxed);
+    let (tray, items) = match build_tray(&initial, initial_workspace) {
         Ok(v) => v,
         Err(e) => {
             let _ = init_tx.send(Err(e));
@@ -504,6 +511,7 @@ fn run_tray_thread(
     // Ensure the thread has a message queue before signaling init complete.
     // PeekMessageW creates the queue as a side effect, so subsequent
     // PostThreadMessageW calls from the caller won't be lost.
+    let mut rendered_workspace = initial_workspace;
     unsafe {
         let mut msg = std::mem::zeroed::<win32_msg::MSG>();
         win32_msg::PeekMessageW(&mut msg, std::ptr::null_mut(), 0, 0, win32_msg::PM_NOREMOVE);
@@ -528,6 +536,23 @@ fn run_tray_thread(
                     win32_msg::WM_APP_UPDATE_TOOLTIP => {
                         if let Ok(text) = shared.tooltip_text.lock() {
                             let _ = tray.set_tooltip(Some(text.as_str()));
+                        }
+                        let workspace = shared.active_workspace.load(Ordering::Relaxed);
+                        if workspace != rendered_workspace {
+                            match create_workspace_icon(workspace) {
+                                Ok(icon) => {
+                                    if tray.set_icon(Some(icon)).is_ok() {
+                                        rendered_workspace = workspace;
+                                    }
+                                }
+                                Err(error) => {
+                                    tracing::warn!(
+                                        workspace,
+                                        %error,
+                                        "Failed to update dynamic workspace tray icon"
+                                    );
+                                }
+                            }
                         }
                         continue;
                     }
@@ -611,7 +636,10 @@ fn run_tray_thread(
 
 /// Build the tray icon with its context menu. Called on the message-loop
 /// thread so the hidden notification window belongs to that thread.
-fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
+fn build_tray(
+    initial: &QuickToggleState,
+    initial_workspace: u8,
+) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
     let zh = use_chinese(initial.language);
     let tr = |en: &'static str, cn: &'static str| if zh { cn } else { en };
     let menu = Menu::new();
@@ -820,7 +848,10 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     ))?;
 
     // Create the tray icon with a simple embedded icon
-    let icon = create_default_icon()?;
+    let icon = create_workspace_icon(initial_workspace).or_else(|error| {
+        tracing::warn!(%error, "Falling back to the static LeopardWM tray icon");
+        create_default_icon()
+    })?;
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
@@ -956,6 +987,122 @@ fn create_default_icon() -> Result<tray_icon::Icon, TrayError> {
         .map_err(|e| TrayError::Icon(e.to_string()))
 }
 
+const WORKSPACE_ICON_SIZE: usize = 32;
+
+/// Five-by-seven bitmap glyphs for 1-9. Rendering these ourselves keeps the
+/// dynamic icon deterministic and avoids depending on a particular Windows
+/// font having the Unicode circled-number glyphs installed.
+const WORKSPACE_DIGITS: [[u8; 7]; 9] = [
+    [
+        0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+    ],
+    [
+        0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b11111,
+    ],
+    [
+        0b11110, 0b00001, 0b00001, 0b01110, 0b00001, 0b00001, 0b11110,
+    ],
+    [
+        0b00010, 0b00110, 0b01010, 0b10010, 0b11111, 0b00010, 0b00010,
+    ],
+    [
+        0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b11110,
+    ],
+    [
+        0b01110, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b01110,
+    ],
+    [
+        0b11111, 0b00001, 0b00010, 0b00100, 0b01000, 0b01000, 0b01000,
+    ],
+    [
+        0b01110, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b01110,
+    ],
+    [
+        0b01110, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b01110,
+    ],
+];
+
+fn workspace_icon_rgba(workspace: u8) -> Result<Vec<u8>, TrayError> {
+    if !(1..=9).contains(&workspace) {
+        return Err(TrayError::Icon(format!(
+            "workspace icon index must be 1-9, got {workspace}"
+        )));
+    }
+
+    let mut rgba = vec![0u8; WORKSPACE_ICON_SIZE * WORKSPACE_ICON_SIZE * 4];
+    let center = (WORKSPACE_ICON_SIZE as f32 - 1.0) / 2.0;
+    let outer_radius = 14.5f32;
+    let inner_radius = 12.3f32;
+
+    for y in 0..WORKSPACE_ICON_SIZE {
+        for x in 0..WORKSPACE_ICON_SIZE {
+            // Four-by-four supersampling gives the circular edge a stable,
+            // antialiased outline at the small sizes used by the Windows tray.
+            let mut disk_samples = 0u16;
+            let mut ring_samples = 0u16;
+            for sy in 0..4 {
+                for sx in 0..4 {
+                    let px = x as f32 + (sx as f32 + 0.5) / 4.0;
+                    let py = y as f32 + (sy as f32 + 0.5) / 4.0;
+                    let dx = px - (center + 0.5);
+                    let dy = py - (center + 0.5);
+                    let distance = (dx * dx + dy * dy).sqrt();
+                    if distance <= outer_radius {
+                        disk_samples += 1;
+                    }
+                    if distance > inner_radius && distance <= outer_radius {
+                        ring_samples += 1;
+                    }
+                }
+            }
+            if disk_samples == 0 {
+                continue;
+            }
+            let offset = (y * WORKSPACE_ICON_SIZE + x) * 4;
+            let ring_mix = ring_samples as f32 / disk_samples as f32;
+            // Windows accent-blue disc with a bright outer ring. It remains
+            // legible on both light and dark taskbars.
+            rgba[offset] = (0.0 * (1.0 - ring_mix) + 225.0 * ring_mix) as u8;
+            rgba[offset + 1] = (120.0 * (1.0 - ring_mix) + 245.0 * ring_mix) as u8;
+            rgba[offset + 2] = (212.0 * (1.0 - ring_mix) + 255.0 * ring_mix) as u8;
+            rgba[offset + 3] = ((disk_samples as f32 / 16.0) * 255.0).round() as u8;
+        }
+    }
+
+    let glyph = WORKSPACE_DIGITS[(workspace - 1) as usize];
+    let scale = 3usize;
+    let glyph_width = 5 * scale;
+    let glyph_height = 7 * scale;
+    let origin_x = (WORKSPACE_ICON_SIZE - glyph_width) / 2;
+    let origin_y = (WORKSPACE_ICON_SIZE - glyph_height) / 2;
+    for (row, bits) in glyph.iter().enumerate() {
+        for column in 0..5 {
+            if bits & (1 << (4 - column)) == 0 {
+                continue;
+            }
+            for dy in 0..scale {
+                for dx in 0..scale {
+                    let x = origin_x + column * scale + dx;
+                    let y = origin_y + row * scale + dy;
+                    let offset = (y * WORKSPACE_ICON_SIZE + x) * 4;
+                    rgba[offset..offset + 4].copy_from_slice(&[255, 255, 255, 255]);
+                }
+            }
+        }
+    }
+
+    Ok(rgba)
+}
+
+fn create_workspace_icon(workspace: u8) -> Result<tray_icon::Icon, TrayError> {
+    tray_icon::Icon::from_rgba(
+        workspace_icon_rgba(workspace)?,
+        WORKSPACE_ICON_SIZE as u32,
+        WORKSPACE_ICON_SIZE as u32,
+    )
+    .map_err(|error| TrayError::Icon(error.to_string()))
+}
+
 /// Errors that can occur during tray operations.
 #[derive(Debug, Error)]
 pub enum TrayError {
@@ -972,6 +1119,32 @@ pub enum TrayError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_icons_are_valid_distinct_rgba_images() {
+        let icons: Vec<Vec<u8>> = (1..=9)
+            .map(|workspace| workspace_icon_rgba(workspace).expect("valid workspace icon"))
+            .collect();
+
+        for icon in &icons {
+            assert_eq!(icon.len(), WORKSPACE_ICON_SIZE * WORKSPACE_ICON_SIZE * 4);
+            assert_eq!(icon[3], 0, "top-left corner must be transparent");
+            let top_right_alpha = (WORKSPACE_ICON_SIZE - 1) * 4 + 3;
+            assert_eq!(icon[top_right_alpha], 0, "top-right must be transparent");
+            let center =
+                (WORKSPACE_ICON_SIZE / 2 * WORKSPACE_ICON_SIZE + WORKSPACE_ICON_SIZE / 2) * 4;
+            assert_eq!(icon[center + 3], 255, "icon center must be opaque");
+        }
+
+        for (index, icon) in icons.iter().enumerate() {
+            assert!(
+                icons.iter().skip(index + 1).all(|other| other != icon),
+                "workspace digit images must be distinct"
+            );
+        }
+        assert!(workspace_icon_rgba(0).is_err());
+        assert!(workspace_icon_rgba(10).is_err());
+    }
 
     #[test]
     fn test_create_default_icon() {
