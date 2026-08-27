@@ -22,6 +22,22 @@ pub(crate) const SNAPBACK_SETTLE_AFTER_CREATE: std::time::Duration =
 pub(crate) const SNAPBACK_MAXIMIZE_GRACE: std::time::Duration =
     std::time::Duration::from_millis(1200);
 
+const DEFAULT_FOCUS_INPUT_RECENT_MS: u32 = 1500;
+const SLOW_WINUI_FOCUS_INPUT_RECENT_MS: u32 = 5000;
+
+/// Win+I and other shell-launched WinUI windows can take several seconds to
+/// raise an existing ApplicationFrameWindow. Keep the conservative threshold
+/// for ordinary apps, but preserve the initiating keypress long enough for
+/// these known slow hosts to scroll their focused column into view.
+pub(crate) fn focus_input_recency_threshold_ms(class_name: Option<&str>) -> u32 {
+    match class_name {
+        Some("ApplicationFrameWindow" | "WinUIDesktopWin32WindowClass") => {
+            SLOW_WINUI_FOCUS_INPUT_RECENT_MS
+        }
+        _ => DEFAULT_FOCUS_INPUT_RECENT_MS,
+    }
+}
+
 /// Whether to defer snapping a tiled window back to its layout slot because it
 /// opened maximized and is still settling. An app opening several windows/tabs
 /// at once can momentarily report a restored size between maximize passes;
@@ -1608,9 +1624,10 @@ impl AppState {
             // scroll. The user can still hotkey the focus shift,
             // which goes through `command_handler` and bypasses
             // this gate entirely.
-            const FOCUS_INPUT_RECENT_MS: u32 = 1500;
+            let focus_class = self.lookup_window_info(hwnd).map(|info| info.class_name);
+            let focus_input_recent_ms = focus_input_recency_threshold_ms(focus_class.as_deref());
             let user_initiated = leopardwm_platform_win32::ms_since_last_user_input()
-                .map(|ms| ms <= FOCUS_INPUT_RECENT_MS)
+                .map(|ms| ms <= focus_input_recent_ms)
                 .unwrap_or(false);
             // A non-user-initiated focus event for a window other than the
             // fullscreen one (e.g. a window that just opened behind a fullscreen

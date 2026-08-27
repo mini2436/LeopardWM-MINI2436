@@ -6883,6 +6883,25 @@ fn test_fullscreen_focus_guard() {
 }
 
 #[test]
+fn test_winui_focus_keeps_slow_shell_launch_input_fresh_longer() {
+    use crate::event_handler::focus_input_recency_threshold_ms;
+
+    assert_eq!(focus_input_recency_threshold_ms(None), 1500);
+    assert_eq!(
+        focus_input_recency_threshold_ms(Some("Chrome_WidgetWin_1")),
+        1500
+    );
+    assert_eq!(
+        focus_input_recency_threshold_ms(Some("ApplicationFrameWindow")),
+        5000
+    );
+    assert_eq!(
+        focus_input_recency_threshold_ms(Some("WinUIDesktopWin32WindowClass")),
+        5000
+    );
+}
+
+#[test]
 fn test_pull_window_to_workspace() {
     // The Edit Config pull moves a tiled window from another workspace onto the
     // active one and focuses it (#57).
