@@ -27,6 +27,8 @@ const BUILTIN_IGNORE_EXECUTABLES: &[&str] = &[
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Config {
+    /// Language used by the settings UI and native menus.
+    pub language: Language,
     /// Layout configuration.
     pub layout: LayoutConfig,
     /// Appearance configuration.
@@ -53,6 +55,25 @@ pub struct Config {
     /// Overview-mode configuration.
     #[serde(default)]
     pub overview: OverviewConfig,
+}
+
+/// User-interface language. `System` follows the Windows display language.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub enum Language {
+    #[default]
+    #[serde(rename = "system")]
+    System,
+    #[serde(rename = "en")]
+    English,
+    #[serde(rename = "zh-CN")]
+    SimplifiedChinese,
+}
+
+pub const MIN_WORKSPACE_COUNT: usize = 1;
+pub const MAX_WORKSPACE_COUNT: usize = 9;
+
+fn default_workspace_count() -> usize {
+    MAX_WORKSPACE_COUNT
 }
 
 /// Overview-mode configuration.
@@ -87,14 +108,30 @@ pub enum OverviewRender {
 /// workspace 2, and so on (up to 9). An empty string leaves that
 /// workspace unnamed (shown by its number). Trailing entries may be
 /// omitted; only workspaces you want to name need an entry.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WorkspacesConfig {
+    /// Number of workspaces available on every monitor (1-9).
+    #[serde(default = "default_workspace_count")]
+    pub count: usize,
     /// Display names for workspaces 1-9, by position.
     pub names: Vec<String>,
 }
 
+impl Default for WorkspacesConfig {
+    fn default() -> Self {
+        Self {
+            count: default_workspace_count(),
+            names: Vec::new(),
+        }
+    }
+}
+
 impl WorkspacesConfig {
+    pub fn count(&self) -> usize {
+        self.count.clamp(MIN_WORKSPACE_COUNT, MAX_WORKSPACE_COUNT)
+    }
+
     /// Resolve the display name for a 0-based workspace index, or `None`
     /// if unnamed (no entry or empty string).
     pub fn name_for(&self, index_0based: usize) -> Option<String> {
@@ -1048,6 +1085,19 @@ impl Config {
     pub fn validate(&mut self) -> Vec<ConfigWarning> {
         let mut warnings = Vec::new();
 
+        if !(MIN_WORKSPACE_COUNT..=MAX_WORKSPACE_COUNT).contains(&self.workspaces.count) {
+            let supplied = self.workspaces.count;
+            self.workspaces.count = supplied.clamp(MIN_WORKSPACE_COUNT, MAX_WORKSPACE_COUNT);
+            warnings.push(ConfigWarning {
+                field: "workspaces.count".to_string(),
+                message: format!(
+                    "Workspace count must be between {MIN_WORKSPACE_COUNT} and {MAX_WORKSPACE_COUNT} (got {supplied}); clamped to {}",
+                    self.workspaces.count
+                ),
+            });
+        }
+        self.workspaces.names.truncate(self.workspaces.count());
+
         // animation durations clamped to a sane ceiling so a typo can't
         // make the WM feel frozen.
         for (field, val) in [
@@ -1305,12 +1355,14 @@ impl Config {
 
             // Validate the open placement extras; warn and drop just the
             // invalid property rather than the whole rule.
+            let workspace_count = self.workspaces.count() as u8;
             let open_on_workspace = match rule.open_on_workspace {
-                Some(n) if (1..=9).contains(&n) => Some((n - 1) as usize),
+                Some(n) if (1..=workspace_count).contains(&n) => Some((n - 1) as usize),
                 Some(n) => {
                     tracing::warn!(
-                        "Window rule open_on_workspace = {} is out of range (1-9); ignoring",
-                        n
+                        "Window rule open_on_workspace = {} is out of range (1-{}); ignoring",
+                        n,
+                        workspace_count
                     );
                     None
                 }
@@ -2489,6 +2541,27 @@ mod tests {
         let config: Config = toml::from_str(toml).expect("parse");
         assert_eq!(config.workspaces.name_for(0).as_deref(), Some("web"));
         assert_eq!(config.workspaces.name_for(2).as_deref(), Some("chat"));
+    }
+
+    #[test]
+    fn test_language_and_workspace_count_parse_and_validate() {
+        let toml = "language = \"zh-CN\"\n[workspaces]\ncount = 4\nnames = [\"一\", \"二\"]\n";
+        let mut config: Config = toml::from_str(toml).expect("parse");
+        assert_eq!(config.language, Language::SimplifiedChinese);
+        assert_eq!(config.workspaces.count(), 4);
+        assert!(config.validate().is_empty());
+
+        config.workspaces.count = 99;
+        let warnings = config.validate();
+        assert_eq!(config.workspaces.count, MAX_WORKSPACE_COUNT);
+        assert!(warnings.iter().any(|w| w.field == "workspaces.count"));
+    }
+
+    #[test]
+    fn test_legacy_config_keeps_nine_workspaces_and_system_language() {
+        let config: Config = toml::from_str("[layout]\ngap = 8\n").expect("parse");
+        assert_eq!(config.language, Language::System);
+        assert_eq!(config.workspaces.count(), 9);
     }
 
     #[test]

@@ -30,6 +30,9 @@ pub fn render_config(overrides: &TemplateOverrides) -> String {
         r#"{header}
 # https://github.com/jcardama/LeopardWM
 
+# UI language: "system", "en", or "zh-CN".
+language = "system"
+
 [layout]
 # Gap between columns in pixels
 gap = {gap}
@@ -148,6 +151,8 @@ reduce_motion_on_battery = true
 # render = "live"
 
 [workspaces]
+# Number of workspaces per monitor. Valid range: 1-9.
+count = 9
 # Optional display names for workspaces 1-9, by position. Shown in
 # `lwm query workspace` and pushed to bars over IPC. Leave an entry empty
 # ("") to keep that workspace's number. Omit the list to name nothing.

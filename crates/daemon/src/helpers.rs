@@ -158,6 +158,37 @@ impl AppState {
 
         self.config = config;
 
+        // Reconcile the runtime model before applying the remaining settings.
+        // When shrinking, merge removed workspaces into the last retained one
+        // so no tiled or floating window becomes unreachable.
+        let workspace_count = self.config.workspaces.count();
+        let monitor_ids: Vec<_> = self.workspaces.keys().copied().collect();
+        for monitor_id in monitor_ids {
+            while self
+                .workspaces
+                .get(&monitor_id)
+                .is_some_and(|items| items.len() < workspace_count)
+            {
+                let next = self.workspaces[&monitor_id].len();
+                let _ = self.ensure_workspace_exists(monitor_id, next);
+            }
+            if let Some(items) = self.workspaces.get_mut(&monitor_id) {
+                if items.len() > workspace_count {
+                    let removed = items.split_off(workspace_count);
+                    if let Some(destination) = items.last_mut() {
+                        for source in removed {
+                            destination.append_workspace(source);
+                        }
+                    }
+                }
+            }
+            let active = self.active_workspace_idx(monitor_id);
+            if active >= workspace_count {
+                self.active_workspace
+                    .insert(monitor_id, workspace_count - 1);
+            }
+        }
+
         // Update scroll modifier for the gesture hook
         leopardwm_platform_win32::set_scroll_modifier(&self.config.hotkeys.scroll_modifier);
 

@@ -243,7 +243,9 @@ impl AppState {
             // Clamp to the 1-9 workspace range (0-based 0..=8). The snapshot is
             // user-writable JSON, so a garbage index must not drive the vec to
             // pathological length on startup.
-            let ws_idx = ws_snapshot.workspace_index.min(8);
+            let ws_idx = ws_snapshot
+                .workspace_index
+                .min(self.config.workspaces.count() - 1);
 
             // Clone the saved workspace and drop windows that should not be
             // restored (closed while the daemon was down, or now unmanageable).
@@ -317,7 +319,11 @@ impl AppState {
                 );
                 entry.push(empty);
             }
-            entry[ws_idx] = ws;
+            if entry[ws_idx].all_window_ids().is_empty() {
+                entry[ws_idx] = ws;
+            } else {
+                entry[ws_idx].append_workspace(ws);
+            }
             restored_slots.insert((monitor_id, ws_idx));
             info!(
                 "Restored workspace structure for monitor '{}' workspace {}",
@@ -349,7 +355,9 @@ impl AppState {
                 .map(|(&id, _)| id);
 
             if let Some(id) = monitor_id {
-                let ws_idx = ws_snapshot.workspace_index;
+                let ws_idx = ws_snapshot
+                    .workspace_index
+                    .min(self.config.workspaces.count() - 1);
                 if let Some(ws_vec) = self.workspaces.get_mut(&id) {
                     // Extend the vec with empty workspaces if needed
                     let scale = self

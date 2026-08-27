@@ -773,7 +773,27 @@ impl AppState {
                 focused_monitor = monitor.id;
             }
 
-            workspaces.insert(monitor.id, vec![workspace]);
+            let mut monitor_workspaces = vec![workspace];
+            while monitor_workspaces.len() < config.workspaces.count() {
+                let mut workspace = Workspace::with_directional_gaps(
+                    params.gap,
+                    params.outer_gap_left,
+                    params.outer_gap_right,
+                    params.outer_gap_top,
+                    params.outer_gap_bottom,
+                );
+                workspace.set_default_column_width(params.default_column_width);
+                workspace.set_tab_strip_reserve_px(params.tab_strip_reserve_px);
+                workspace.set_centering_mode(config.layout.centering_mode.into());
+                workspace.set_center_past_edges(config.layout.center_past_edges);
+                workspace.set_reduce_motion(initial_reduce_motion);
+                workspace.set_scroll_animation(
+                    config.animation.scroll_duration_ms,
+                    config.animation.easing,
+                );
+                monitor_workspaces.push(workspace);
+            }
+            workspaces.insert(monitor.id, monitor_workspaces);
             active_workspace_map.insert(monitor.id, 0usize);
             monitor_map.insert(monitor.id, monitor);
         }
@@ -1196,6 +1216,9 @@ impl AppState {
     ) -> Option<&mut Workspace> {
         use crate::helpers::ScaledLayoutParams;
 
+        if idx >= self.config.workspaces.count() {
+            return None;
+        }
         let scale = self
             .monitors
             .get(&monitor_id)

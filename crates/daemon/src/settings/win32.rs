@@ -195,11 +195,31 @@ pub fn run_settings_window(
         };
         RegisterClassExW(&wc);
 
-        // Create the window
+        // Create the window. The WebView content switches immediately when the
+        // language option changes; the native frame title uses the language
+        // active when this Settings instance was opened.
+        let use_chinese = match config.language {
+            crate::config::Language::SimplifiedChinese => true,
+            crate::config::Language::English => false,
+            crate::config::Language::System => {
+                #[link(name = "kernel32")]
+                extern "system" {
+                    fn GetUserDefaultUILanguage() -> u16;
+                }
+                GetUserDefaultUILanguage() & 0x03ff == 0x04
+            }
+        };
+        let window_title: Vec<u16> = if use_chinese {
+            "LeopardWM 设置\0"
+        } else {
+            "LeopardWM Settings\0"
+        }
+        .encode_utf16()
+        .collect();
         let hwnd = CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             class_name,
-            w!("LeopardWM Settings"),
+            PCWSTR(window_title.as_ptr()),
             WS_OVERLAPPEDWINDOW,
             CW_USEDEFAULT,
             CW_USEDEFAULT,

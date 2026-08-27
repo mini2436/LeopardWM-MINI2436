@@ -672,12 +672,12 @@ impl AppState {
 
     /// Handle `IpcCommand::WorkspacePrev` and `IpcCommand::WorkspaceNext`.
     fn handle_workspace_prev_next(&mut self, cmd: IpcCommand) -> IpcResponse {
-        const COUNT: usize = 9;
+        let count = self.config.workspaces.count();
         let monitor = self.focused_monitor;
         let current = self.active_workspace_idx(monitor);
         let (target, forward) = match cmd {
-            IpcCommand::WorkspacePrev => ((current + COUNT - 1) % COUNT, false),
-            IpcCommand::WorkspaceNext => ((current + 1) % COUNT, true),
+            IpcCommand::WorkspacePrev => ((current + count - 1) % count, false),
+            IpcCommand::WorkspaceNext => ((current + 1) % count, true),
             _ => unreachable!(),
         };
         self.handle_switch_workspace_with_direction((target + 1) as u8, Some(forward))
@@ -687,13 +687,13 @@ impl AppState {
     /// (`forward = true`) workspace, wrapping 1 ↔ 9. Handles
     /// `IpcCommand::MoveToWorkspacePrev` / `MoveToWorkspaceNext`.
     fn handle_move_to_workspace_relative(&mut self, forward: bool) -> IpcResponse {
-        const COUNT: usize = 9;
+        let count = self.config.workspaces.count();
         let monitor = self.focused_monitor;
         let current = self.active_workspace_idx(monitor);
         let target = if forward {
-            (current + 1) % COUNT
+            (current + 1) % count
         } else {
-            (current + COUNT - 1) % COUNT
+            (current + count - 1) % count
         };
         self.handle_move_to_workspace((target + 1) as u8)
     }
@@ -932,8 +932,9 @@ impl AppState {
         index: u8,
         relative_forward: Option<bool>,
     ) -> IpcResponse {
-        if !(1..=9).contains(&index) {
-            return IpcResponse::error("Workspace index must be 1-9");
+        let workspace_count = self.config.workspaces.count();
+        if index == 0 || index as usize > workspace_count {
+            return IpcResponse::error(format!("Workspace index must be 1-{workspace_count}"));
         }
         // A switch initiated outside the overlay (hotkey, CLI) dismisses
         // an open overview; overlay-initiated switches hid it already.
@@ -1177,8 +1178,9 @@ impl AppState {
 
     /// Handle `IpcCommand::MoveToWorkspace`.
     fn handle_move_to_workspace(&mut self, index: u8) -> IpcResponse {
-        if !(1..=9).contains(&index) {
-            return IpcResponse::error("Workspace index must be 1-9");
+        let workspace_count = self.config.workspaces.count();
+        if index == 0 || index as usize > workspace_count {
+            return IpcResponse::error(format!("Workspace index must be 1-{workspace_count}"));
         }
         let idx = (index - 1) as usize;
         let monitor = self.focused_monitor;

@@ -25,6 +25,23 @@ fn test_app_state_new() {
 }
 
 #[test]
+fn test_configured_workspace_count_initializes_and_limits_commands() {
+    let mut config = test_config();
+    config.workspaces.count = 4;
+    let mut state = AppState::new_with_config(config, test_monitors());
+    assert_eq!(state.workspaces.get(&1).unwrap().len(), 4);
+
+    assert_eq!(
+        state.handle_command(IpcCommand::SwitchWorkspace { index: 5 }),
+        IpcResponse::error("Workspace index must be 1-4")
+    );
+    assert_eq!(
+        state.handle_command(IpcCommand::MoveToWorkspace { index: 5 }),
+        IpcResponse::error("Workspace index must be 1-4")
+    );
+}
+
+#[test]
 fn test_application_fullscreen_detector_prefers_chrome_and_rejects_maximized() {
     use crate::event_handler::detect_application_fullscreen;
 
@@ -5106,8 +5123,12 @@ fn test_cmd_reload() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::Reload);
     assert_eq!(resp, IpcResponse::Ok);
-    // Config was reloaded (default since no config file in test env)
-    assert_eq!(state.config.layout.gap, Config::default().layout.gap);
+    // Reload intentionally uses the real config discovery path. Do not assume
+    // the developer machine has no config file; verify the loaded config was
+    // validated into its public invariants instead.
+    assert!(state.config.layout.gap >= 0);
+    assert!((config::MIN_WORKSPACE_COUNT..=config::MAX_WORKSPACE_COUNT)
+        .contains(&state.config.workspaces.count));
 }
 
 #[test]

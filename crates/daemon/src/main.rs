@@ -326,6 +326,7 @@ struct HotkeyState {
 /// Build the tray quick-toggle state from config (reads autostart from the registry).
 fn quick_toggle_state(config: &Config) -> tray::QuickToggleState {
     tray::QuickToggleState {
+        language: config.language,
         active_border: config.appearance.active_border,
         focus_new_windows: config.behavior.focus_new_windows,
         focus_follows_mouse: config.behavior.focus_follows_mouse,
@@ -2043,6 +2044,19 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             info!("Tray: Settings requested");
             let (config_snapshot, hc) = {
                 let mut st = ctx.state.lock().await;
+                // WinEvent hooks use WINEVENT_SKIPOWNPROCESS, so focusing our
+                // own Settings WebView does not reach on_unmanaged_window_focused.
+                // Without explicit cleanup the layered focus-border window stays
+                // above the previously focused tile. Window-picking screenshot
+                // tools (notably WeChat) can then combine the border overlay's
+                // screen origin with the WebView child rect and draw/capture the
+                // Settings surface at an offset. Suspend border tracking before
+                // the internal window is created; focus returning to an external
+                // managed window emits the normal foreground event and restores it.
+                st.hide_border();
+                st.previous_focused_hwnd = None;
+                let monitor = st.focused_monitor as i64;
+                st.broadcast_focused_window_if_changed(monitor, None);
                 st.refresh_high_contrast();
                 (st.config.clone(), st.high_contrast)
             };
@@ -2058,6 +2072,12 @@ async fn handle_tray_event(ctx: &mut EventLoopCtx<'_>, tray_event: tray::TrayEve
             info!("Tray: About requested");
             let (config_snapshot, hc) = {
                 let mut st = ctx.state.lock().await;
+                // See OpenConfig: own-process foreground events are skipped, so
+                // the border must be suspended explicitly for the About surface.
+                st.hide_border();
+                st.previous_focused_hwnd = None;
+                let monitor = st.focused_monitor as i64;
+                st.broadcast_focused_window_if_changed(monitor, None);
                 st.refresh_high_contrast();
                 (st.config.clone(), st.high_contrast)
             };

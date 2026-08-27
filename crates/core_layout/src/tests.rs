@@ -4103,4 +4103,25 @@ mod tests {
         // active_idx should still be 1 (not the dragged window).
         assert_eq!(ws.columns[1].active_tab_idx(), Some(1));
     }
+
+    #[test]
+    fn test_append_workspace_preserves_columns_and_floating_windows() {
+        let mut destination = Workspace::with_gaps(8, 8);
+        destination.insert_window(1, Some(400)).unwrap();
+
+        let mut source = Workspace::with_gaps(8, 8);
+        source.insert_window(2, Some(500)).unwrap();
+        source.insert_window_in_column(3, 0).unwrap();
+        source.add_floating(4, Rect::new(20, 30, 300, 200)).unwrap();
+        source.set_floating_pinned(4, true);
+        source.mark_minimized(3);
+
+        destination.append_workspace(source);
+
+        assert_eq!(destination.column_count(), 2);
+        assert_eq!(destination.columns()[1].windows(), &[2, 3]);
+        assert!(destination.is_minimized(3));
+        assert_eq!(destination.floating_windows()[0].id, 4);
+        assert!(destination.floating_windows()[0].pinned);
+    }
 }

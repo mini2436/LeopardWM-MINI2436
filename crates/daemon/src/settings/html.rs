@@ -901,7 +901,11 @@ input[type="range"]::-webkit-slider-thumb {
 <div class="app">
   <nav class="nav">
     <div class="nav-brand">Settings</div>
-    <a href="#" data-section="layout" class="nav-item active">
+    <a href="#" data-section="general" class="nav-item active">
+      <svg class="nav-icon" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M2 8h12M8 2a10 10 0 010 12M8 2a10 10 0 000 12"/></svg>
+      General
+    </a>
+    <a href="#" data-section="layout" class="nav-item">
       <svg class="nav-icon" viewBox="0 0 16 16"><rect x="1.5" y="2.5" width="5" height="11" rx="1"/><rect x="9.5" y="2.5" width="5" height="11" rx="1"/></svg>
       Layout
     </a>
@@ -938,8 +942,26 @@ input[type="range"]::-webkit-slider-thumb {
 
   <div class="main">
     <div class="content">
+      <!-- General -->
+      <div id="sec-general" class="section active">
+        <h2 class="section-title">General</h2>
+        <div class="card">
+          <div class="field">
+            <div class="field-info"><div class="field-label">Language</div><div class="field-desc">Choose the language used by LeopardWM</div></div>
+            <div class="combobox" id="cb-language">
+              <button class="combobox-trigger" type="button"><span class="combobox-text">Follow system</span><svg class="combobox-chevron" viewBox="0 0 12 12"><path d="M2.15 4.65a.5.5 0 01.7 0L6 7.79l3.15-3.14a.5.5 0 11.7.7l-3.5 3.5a.5.5 0 01-.7 0l-3.5-3.5a.5.5 0 010-.7z"/></svg></button>
+              <div class="combobox-popup">
+                <div class="combobox-option selected" data-value="system">Follow system</div>
+                <div class="combobox-option" data-value="en">English</div>
+                <div class="combobox-option" data-value="zh-CN">简体中文</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Layout -->
-      <div id="sec-layout" class="section active">
+      <div id="sec-layout" class="section">
         <h2 class="section-title">Layout</h2>
         <div class="card">
           <div class="field">
@@ -1003,7 +1025,13 @@ input[type="range"]::-webkit-slider-thumb {
         </div>
         <div class="table-actions"><button class="btn btn-sm" onclick="addPresetRow('height',null)">+ Add preset</button></div>
         <h3 class="section-subtitle">Workspace names</h3>
-        <p class="section-desc">Optional labels for workspaces 1-9. Shown in <code>lwm query workspace</code> and sent to bars over IPC. Leave blank to use the number.</p>
+        <p class="section-desc">Choose between 1 and 9 workspaces. Reducing the count moves windows from removed workspaces into the last remaining workspace.</p>
+        <div class="card">
+          <div class="field">
+            <div class="field-info"><div class="field-label">Workspace count</div><div class="field-desc">Available workspaces on each monitor</div></div>
+            <input type="number" id="workspaces-count" min="1" max="9" step="1">
+          </div>
+        </div>
         <div class="card" id="workspace-names-card"></div>
       </div>
 
@@ -1327,6 +1355,113 @@ input[type="range"]::-webkit-slider-thumb {
 </div>
 
 <script>
+/* ── Localization ──────────────────────────────────────────────────── */
+var currentLanguage = 'en';
+var currentWorkspaceCount = 9;
+var ZH_CN = {
+  'Settings':'设置','General':'常规','Language':'语言','Choose the language used by LeopardWM':'选择 LeopardWM 使用的界面语言',
+  'Follow system':'跟随系统','English':'英语','Layout':'布局','Appearance':'外观','Behavior':'行为','Hotkeys':'快捷键',
+  'Rules':'窗口规则','Gestures':'手势','Snap Hints':'贴靠提示','About':'关于','Gap':'间距',
+  'Space between columns and between stacked windows (px)':'列与堆叠窗口之间的间距（像素）',
+  'Outer gap left':'左侧外边距','Outer gap right':'右侧外边距','Outer gap top':'顶部外边距','Outer gap bottom':'底部外边距',
+  'Space at the left edge (px)':'左边缘留白（像素）','Space at the right edge (px)':'右边缘留白（像素）',
+  'Space at the top edge (px)':'上边缘留白（像素）','Space at the bottom edge (px)':'下边缘留白（像素）',
+  'Centering mode':'居中模式','How the focused column is positioned in the viewport':'焦点列在可视区域中的定位方式',
+  'Center':'居中','Just in view':'仅保持可见','On overflow':'溢出时居中','Center past edges':'允许越过边缘居中',
+  'Allow centering to scroll past content boundaries':'居中时允许滚动越过内容边界',
+  'Width presets':'宽度预设','Height presets':'高度预设','Fraction':'比例','+ Add preset':'+ 添加预设',
+  'Default preset for new windows':'新窗口默认预设','Which configured width preset new windows use':'新窗口采用的宽度预设',
+  'Workspace names':'工作区','Choose between 1 and 9 workspaces. Reducing the count moves windows from removed workspaces into the last remaining workspace.':'可设置 1 到 9 个工作区。减少数量时，被删除工作区的窗口会迁移到最后一个保留工作区。',
+  'Workspace count':'工作区数量','Available workspaces on each monitor':'每台显示器可用的工作区数量',
+  'Active border':'活动窗口边框','Highlight the focused window border':'突出显示焦点窗口边框','Border color':'边框颜色',
+  'Active window border color':'活动窗口的边框颜色','Border width':'边框宽度','Active window border thickness (px)':'活动窗口边框粗细（像素）',
+  'Border position':'边框位置','Draw border outside or inside the window frame':'在窗口框架外侧或内侧绘制边框','Outside':'外侧','Inside':'内侧',
+  'Tab strip height':'标签栏高度','Tab strip background':'标签栏背景','Active tab background':'活动标签背景',
+  'Active tab text':'活动标签文字','Inactive tab text':'非活动标签文字','Tab strip opacity':'标签栏不透明度',
+  'Focus new windows':'聚焦新窗口','Automatically focus newly opened windows':'自动聚焦新打开的窗口',
+  'Track focus changes':'跟踪焦点变化','Keep layout focus synchronized with Windows':'使布局焦点与 Windows 保持同步',
+  'Focus follows mouse':'焦点跟随鼠标','Focus a window when the pointer rests over it':'鼠标停留时聚焦窗口',
+  'Mouse follows focus':'鼠标跟随焦点','Move the pointer to windows focused with the keyboard':'将鼠标指针移动到键盘聚焦的窗口',
+  'Workspace edge wrap':'工作区边缘循环','Fullscreen follows focus':'全屏跟随焦点','Disable Windows Snap Layouts':'禁用 Windows 贴靠布局',
+  'Hide off-screen taskbar buttons':'隐藏屏幕外窗口的任务栏按钮','Log level':'日志级别','New window placement':'新窗口位置',
+  'New column':'新列','In focused column':'放入焦点列','Key binding':'按键绑定','Action':'操作','Reset to defaults':'恢复默认值',
+  'Window rules':'窗口规则','Match windows and choose how LeopardWM manages them.':'匹配窗口并选择 LeopardWM 的管理方式。',
+  '+ Add rule':'+ 添加规则','Class':'类名','Title':'标题','Executable':'可执行文件','Options':'选项','Ignore':'忽略','Tile':'平铺','Float':'浮动',
+  'Enable gestures':'启用手势','Swipe left':'向左滑动','Swipe right':'向右滑动','Swipe up':'向上滑动','Swipe down':'向下滑动',
+  'Scroll up':'向上滚动','Scroll down':'向下滚动','No action':'无操作','Enabled':'启用','Show a visual hint while resizing':'调整大小时显示视觉提示',
+  'Duration':'持续时间','Opacity':'不透明度','Animations':'动画','Layout animation':'布局动画','Workspace switch':'切换工作区',
+  'Scroll animation':'滚动动画','Overview animation':'概览动画','Easing':'缓动','Linear':'线性','Ease in':'渐入','Ease out':'渐出','Ease in/out':'渐入渐出',
+  'Reduce motion on battery':'使用电池时减少动画','Skip animations while on battery or power saver':'使用电池或节能模式时跳过动画',
+  'Startup':'启动','Start with Windows':'随 Windows 启动','Automatically start LeopardWM after sign-in':'登录后自动启动 LeopardWM',
+  'Overview':'概览','Render mode':'渲染模式','Live previews':'实时预览','Snapshots':'快照','Placeholders':'占位图',
+  'Version':'版本','Website':'网站','Source code':'源代码','License':'许可证','Third-party notices':'第三方声明','Buy me a coffee':'请作者喝杯咖啡',
+  'High contrast mode.':'高对比度模式。','Border color is overridden by the system highlight color.':'边框颜色将使用系统高亮颜色。',
+  'No valid presets':'没有有效预设','Auto':'自动','Square':'直角','Rounded':'圆角','Small rounded':'小圆角','Maximize':'最大化','Sticky':'粘滞',
+  'Animation':'动画','Acceleration curve for all animations':'所有动画的加速曲线','Transition timing. Durations in milliseconds; 0 snaps instantly.':'过渡时间以毫秒计；设为 0 时立即完成。',
+  'Layout duration':'布局持续时间','Column move / resize / tab changes (ms)':'列移动、调整大小和标签变化（毫秒）','Workspace switch duration':'工作区切换持续时间',
+  'Switching workspaces (ms)':'切换工作区（毫秒）','Scroll duration':'滚动持续时间','Scrolling a column into view (ms)':'将列滚动到可视区域（毫秒）',
+  'Overview open/close zoom (ms)':'概览打开/关闭缩放（毫秒）','Also applies in Windows power saver. Windows Accessibility animation effects always override this setting.':'同样适用于 Windows 节能模式；Windows 辅助功能中的动画设置始终具有更高优先级。',
+  'Column width presets as viewport fractions, used for width cycling.':'列宽预设，以可视区域比例表示，用于循环切换宽度。','Window height presets as column fractions for cycling window heights.':'窗口高度预设，以列高度比例表示，用于循环切换高度。',
+  'Background color for the strip':'标签栏的背景颜色','Highlight color for the active tab':'活动标签的高亮颜色','Text color for the active tab':'活动标签的文字颜色','Text color for inactive tabs':'非活动标签的文字颜色',
+  'Strip translucency (0 transparent &rarr; 255 opaque)':'标签栏透明度（0 为透明，255 为不透明）','Tab strip height in pixels at 96 DPI (scaled per monitor)':'标签栏在 96 DPI 下的像素高度（按显示器缩放）',
+  'Follow Windows focus changes':'跟随 Windows 焦点变化','Focus windows on mouse enter':'鼠标进入窗口时聚焦','Focus delay':'聚焦延迟','Delay before focus change on mouse enter (ms)':'鼠标进入后切换焦点的延迟（毫秒）',
+  'Move the cursor onto the focused window after focus commands (inverse of focus follows mouse)':'执行焦点命令后把鼠标移到焦点窗口（与焦点跟随鼠标相反）',
+  'Focus or move up/down past a column\'s top or bottom edge switches to the adjacent workspace':'焦点或窗口越过列的上下边缘时切换到相邻工作区',
+  'Carry fullscreen to the next focused window (monocle) instead of dropping to the tiled layout. Turn off so fullscreen affects only the one window':'将全屏状态跟随到下一个焦点窗口；关闭后全屏只影响当前窗口',
+  'Disable snap layouts':'禁用贴靠布局','Prevent Windows 11 edge-drag snapping for tiled windows':'阻止 Windows 11 对平铺窗口执行边缘拖动贴靠',
+  'Smooth app animations (experimental)':'平滑应用动画（实验性）','Use DWM thumbnails to animate Chromium / Electron / Firefox / Terminal / .NET windows during column scrolls. Eliminates the 1px wobble and repaint stutter on Chrome, Slack, Discord, WinForms/WPF apps, etc.':'列滚动时使用 DWM 缩略图为 Chromium、Electron、Firefox、终端和 .NET 窗口制作动画，减少 1 像素抖动与重绘卡顿。',
+  'Hide taskbar buttons for off-screen windows':'隐藏屏幕外窗口的任务栏按钮','Hide a window\'s taskbar button while it\'s on another workspace or scrolled out of view. Floating and minimized windows always keep theirs.':'窗口位于其他工作区或滚出视野时隐藏任务栏按钮；浮动和最小化窗口始终保留按钮。',
+  'Daemon logging verbosity':'守护进程日志详细程度','Trace':'跟踪','Debug':'调试','Info':'信息','Warn':'警告','Error':'错误',
+  'Where newly opened windows go: their own column or stacked into the focused column':'新窗口放入独立列，或堆叠到焦点列','Tab close action':'关闭标签时的操作','What X-button click and middle-click do to a tab':'单击关闭按钮或中键单击标签时执行的操作','Close window':'关闭窗口','Untab':'移出标签组',
+  'Command':'命令','Scroll modifier':'滚动修饰键','Reset to default':'恢复默认值','Open on workspace':'在工作区打开','Open in column':'在列中打开','Column width':'列宽','Maximize on open':'打开时最大化','Sticky (follows workspaces)':'粘滞（跟随工作区）','Corners':'圆角','None':'无',
+  'Enable touchpad gesture support':'启用触摸板手势支持','Three-finger swipe left command':'三指向左滑动命令','Three-finger swipe right command':'三指向右滑动命令','Three-finger swipe up command':'三指向上滑动命令','Three-finger swipe down command':'三指向下滑动命令','Scroll wheel up command':'滚轮向上命令','Scroll wheel down command':'滚轮向下命令',
+  'Enable snap hints':'启用贴靠提示','Show visual feedback during resize operations':'调整窗口大小时显示视觉反馈','How long hints are shown (ms)':'提示显示时长（毫秒）','Hint overlay opacity':'提示覆盖层不透明度',
+  'Overview previews':'概览预览','Card contents in the workspace overview: live window previews, snapshots captured when windows leave the screen, or placeholder icons':'工作区概览卡片可显示实时窗口预览、窗口离开屏幕时捕获的快照或占位图标',
+  'Live previews':'实时预览','Snapshots':'快照','Placeholder icons':'占位图标','Automatically launch LeopardWM when you sign in to Windows':'登录 Windows 后自动启动 LeopardWM',
+  'A scrollable tiling window manager for Windows 10/11. Scroll-first layout with vsync-aligned animations, written in Rust.':'适用于 Windows 10/11 的可滚动平铺窗口管理器，采用滚动优先布局和垂直同步动画，使用 Rust 编写。',
+  'Source':'源代码','View on GitHub':'在 GitHub 查看','Contributors':'贡献者','Created by':'作者',
+  'Focus left':'向左聚焦','Focus right':'向右聚焦','Focus up':'向上聚焦','Focus down':'向下聚焦','Focus start of strip':'聚焦到布局起点','Focus end of strip':'聚焦到布局末端',
+  'Move column left':'向左移动列','Move column right':'向右移动列','Move column to start':'将列移到起点','Move column to end':'将列移到末端',
+  'Move window left':'向左移动窗口','Move window right':'向右移动窗口','Expel to left':'向左拆分为新列','Expel to right':'向右拆分为新列','Consume from left':'合并左侧窗口','Consume from right':'合并右侧窗口',
+  'Move window up':'向上移动窗口','Move window down':'向下移动窗口','Cycle width down':'减小列宽预设','Cycle width up':'增大列宽预设','Equalize widths':'均分列宽',
+  'Cycle height down':'减小高度预设','Cycle height up':'增大高度预设','Equalize heights':'均分高度',
+  'Focus monitor left':'聚焦左侧显示器','Focus monitor right':'聚焦右侧显示器','Focus monitor up':'聚焦上方显示器','Focus monitor down':'聚焦下方显示器',
+  'Move to monitor left':'移到左侧显示器','Move to monitor right':'移到右侧显示器','Move to monitor up':'移到上方显示器','Move to monitor down':'移到下方显示器',
+  'Center column':'居中当前列','Maximize column':'最大化当前列','Toggle floating':'切换浮动','Toggle fullscreen':'切换全屏','Toggle tabbed column':'切换标签列',
+  'Toggle scratchpad':'切换暂存区','Stash to scratchpad':'移入暂存区','Toggle sticky':'切换粘滞','Toggle new-window placement (new column / in column)':'切换新窗口位置（新列/当前列）',
+  'Toggle pause':'暂停或恢复','Refresh':'刷新','Reload config':'重新加载配置','Emergency restore':'紧急还原','Toggle overview':'切换概览',
+  'Previous workspace':'上一个工作区','Next workspace':'下一个工作区','Move window to previous workspace':'将窗口移到上一个工作区','Move window to next workspace':'将窗口移到下一个工作区'
+};
+function resolvedLanguage(value) {
+  if (value === 'zh-CN' || value === 'en') return value;
+  return ((navigator.language || '').toLowerCase().indexOf('zh') === 0) ? 'zh-CN' : 'en';
+}
+function translateTree(root) {
+  var walker = document.createTreeWalker(root || document.body, NodeFilter.SHOW_TEXT);
+  var nodes = [], node;
+  while ((node = walker.nextNode())) nodes.push(node);
+  nodes.forEach(function(textNode) {
+    if (textNode.parentElement && /^(SCRIPT|STYLE|CODE)$/.test(textNode.parentElement.tagName)) return;
+    if (textNode._lwmOriginal == null) textNode._lwmOriginal = textNode.nodeValue;
+    var original = textNode._lwmOriginal;
+    var key = original.trim();
+    var translated = currentLanguage === 'zh-CN' ? ZH_CN[key] : null;
+    if (translated == null && currentLanguage === 'zh-CN') {
+      var workspaceMatch = key.match(/^Workspace (\d+)$/);
+      if (workspaceMatch) translated = '工作区 ' + workspaceMatch[1];
+      var moveWorkspaceMatch = key.match(/^Move to Workspace (\d+)$/);
+      if (moveWorkspaceMatch) translated = '移到工作区 ' + moveWorkspaceMatch[1];
+    }
+    textNode.nodeValue = translated == null ? original : original.replace(key, translated);
+  });
+  document.documentElement.lang = currentLanguage;
+  document.title = currentLanguage === 'zh-CN' ? 'LeopardWM 设置' : 'LeopardWM Settings';
+}
+function applyLanguage(value) {
+  currentLanguage = resolvedLanguage(value);
+  translateTree(document.body);
+}
+
 /* ── Navigation ─────────────────────────────────────────────────────── */
 document.querySelectorAll('.nav-item[data-section]').forEach(function(link) {
   link.addEventListener('click', function(e) {
@@ -1385,6 +1520,7 @@ function initCombobox(cb) {
       cb.classList.remove('open');
       cb.querySelectorAll('.combobox-option').forEach(function(o) { o.classList.remove('selected'); });
       opt.classList.add('selected');
+      if (cb.id === 'cb-language') applyLanguage(opt.dataset.value);
       autoSave(0);
     });
   });
@@ -1523,6 +1659,7 @@ function inputToHex(v) { return v.replace('#', '').toUpperCase(); }
 
 /* ── Init ────────────────────────────────────────────────────────────── */
 function init(cfg) {
+  setCb('cb-language', cfg.language || 'system');
   setVal('layout-gap', cfg.layout.gap);
   setVal('layout-outer_gap_left', cfg.layout.outer_gap_left);
   setVal('layout-outer_gap_right', cfg.layout.outer_gap_right);
@@ -1608,9 +1745,13 @@ function init(cfg) {
   setChecked('animation-reduce_motion_on_battery', anim.reduce_motion_on_battery !== false);
 
   var wsNames = (cfg.workspaces && cfg.workspaces.names) || [];
+  var wsCount = Math.max(1, Math.min(9, Number((cfg.workspaces && cfg.workspaces.count) || 9)));
+  currentWorkspaceCount = wsCount;
+  setVal('workspaces-count', wsCount);
   var wsCard = document.getElementById('workspace-names-card');
-  if (wsCard && !wsCard.hasChildNodes()) {
-    for (var i = 1; i <= 9; i++) {
+  if (wsCard) {
+    wsCard.innerHTML = '';
+    for (var i = 1; i <= wsCount; i++) {
       var row = document.createElement('div');
       row.className = 'field';
       row.innerHTML = '<div class="field-info"><div class="field-label">Workspace ' + i + '</div></div>' +
@@ -1624,9 +1765,10 @@ function init(cfg) {
       el.addEventListener('input', function() { autoSave(500); });
     });
   }
-  for (var j = 1; j <= 9; j++) {
+  for (var j = 1; j <= wsCount; j++) {
     setVal('workspace-name-' + j, wsNames[j - 1] || '');
   }
+  applyLanguage(cfg.language || 'system');
 }
 
 /* ── Delete icon (X) ─────────────────────────────────────────────────── */
@@ -1976,8 +2118,10 @@ function addRuleRow(r) {
   var cornerRadios = ['auto','square','rounded','small_rounded'].map(function(c) {
     return '<div class="menu-radio' + (c === corner ? ' selected' : '') + '" data-value="' + c + '">' + cornerLabels[c] + '</div>';
   }).join('');
-  var ws = (r.open_on_workspace >= 1 && r.open_on_workspace <= 9) ? String(r.open_on_workspace) : '';
-  var wsRadios = ['','1','2','3','4','5','6','7','8','9'].map(function(w) {
+  var ws = (r.open_on_workspace >= 1 && r.open_on_workspace <= currentWorkspaceCount) ? String(r.open_on_workspace) : '';
+  var workspaceChoices = [''];
+  for (var workspaceNumber = 1; workspaceNumber <= currentWorkspaceCount; workspaceNumber++) workspaceChoices.push(String(workspaceNumber));
+  var wsRadios = workspaceChoices.map(function(w) {
     return '<div class="menu-radio' + (w === ws ? ' selected' : '') + '" data-value="' + w + '">' + (w === '' ? 'None' : w) + '</div>';
   }).join('');
   var slot = (r.open_in_column >= 1) ? String(r.open_in_column) : '';
@@ -2156,6 +2300,7 @@ function readConfig() {
     defaultWidthPreset = lastValidDefaultWidthPreset;
   }
   return {
+    language: cbVal('cb-language') || 'system',
     layout: {
       gap: num('layout-gap'),
       outer_gap_left: num('layout-outer_gap_left'),
@@ -2220,6 +2365,7 @@ function readConfig() {
       reduce_motion_on_battery: checked('animation-reduce_motion_on_battery')
     },
     workspaces: {
+      count: Math.max(1, Math.min(9, num('workspaces-count'))),
       names: readWorkspaceNames()
     },
     overview: {
@@ -2230,7 +2376,8 @@ function readConfig() {
 
 function readWorkspaceNames() {
   var names = [];
-  for (var i = 1; i <= 9; i++) {
+  var count = Math.max(1, Math.min(9, num('workspaces-count')));
+  for (var i = 1; i <= count; i++) {
     var el = document.getElementById('workspace-name-' + i);
     names.push(el ? el.value.trim() : '');
   }
@@ -2292,7 +2439,7 @@ function readRules() {
     if (corner !== 'auto') r.corner_style = corner;
     var wsEl = tr.querySelector('.rule-workspace');
     var wsv = wsEl ? parseInt(wsEl.dataset.value, 10) : NaN;
-    if (wsv >= 1 && wsv <= 9) r.open_on_workspace = wsv;
+    if (wsv >= 1 && wsv <= currentWorkspaceCount) r.open_on_workspace = wsv;
     if (tr.querySelector('.rule-maximized').classList.contains('checked')) r.open_maximized = true;
     var slotEl = tr.querySelector('.rule-slot');
     var slotv = slotEl ? parseInt(slotEl.value, 10) : NaN;
@@ -2348,6 +2495,11 @@ document.querySelectorAll('input[type="checkbox"], input[type="color"], input[ty
 document.querySelectorAll('input[type="text"], input[type="number"]').forEach(function(el) {
   el.addEventListener('input', function() { autoSave(500); });
 });
+document.getElementById('workspaces-count').addEventListener('change', function() {
+  var cfg = readConfig();
+  init(cfg);
+  autoSave(0);
+});
 </script>
 </body>
 </html>
@@ -2356,6 +2508,15 @@ document.querySelectorAll('input[type="text"], input[type="number"]').forEach(fu
 #[cfg(test)]
 mod tests {
     use super::SETTINGS_HTML;
+
+    #[test]
+    fn language_and_workspace_count_are_round_tripped() {
+        assert!(SETTINGS_HTML.contains("id=\"cb-language\""));
+        assert!(SETTINGS_HTML.contains("language: cbVal('cb-language') || 'system'"));
+        assert!(SETTINGS_HTML.contains("id=\"workspaces-count\" min=\"1\" max=\"9\""));
+        assert!(SETTINGS_HTML.contains("count: Math.max(1, Math.min(9, num('workspaces-count')))"));
+        assert!(SETTINGS_HTML.contains("'Settings':'设置'"));
+    }
 
     #[test]
     fn reduce_motion_on_battery_is_wired_into_settings_config() {

@@ -156,6 +156,7 @@ pub const PLACEMENT_IN_COLUMN: u8 = 1;
 /// message-loop thread. Updates are communicated via these shared atomics
 /// and mutexes, with `PostThreadMessageW` to wake the thread.
 struct SharedState {
+    use_chinese: AtomicBool,
     paused: AtomicBool,
     tooltip_text: Mutex<String>,
     active_border: AtomicBool,
@@ -187,6 +188,7 @@ struct TrayItems {
 
 /// Initial state for quick-toggle menu items.
 pub struct QuickToggleState {
+    pub language: crate::config::Language,
     pub active_border: bool,
     pub focus_new_windows: bool,
     pub focus_follows_mouse: bool,
@@ -196,6 +198,23 @@ pub struct QuickToggleState {
     pub centering_mode: u8,
     /// 0 = NewColumn, 1 = InColumn
     pub placement_mode: u8,
+}
+
+fn system_uses_chinese() -> bool {
+    #[link(name = "kernel32")]
+    extern "system" {
+        fn GetUserDefaultUILanguage() -> u16;
+    }
+    // PRIMARYLANGID(langid) == LANG_CHINESE (0x04).
+    unsafe { GetUserDefaultUILanguage() & 0x03ff == 0x04 }
+}
+
+fn use_chinese(language: crate::config::Language) -> bool {
+    match language {
+        crate::config::Language::System => system_uses_chinese(),
+        crate::config::Language::English => false,
+        crate::config::Language::SimplifiedChinese => true,
+    }
 }
 
 /// Manages the system tray icon and context menu.
@@ -224,8 +243,13 @@ impl TrayManager {
         initial: QuickToggleState,
     ) -> Result<Self, TrayError> {
         let shared = Arc::new(SharedState {
+            use_chinese: AtomicBool::new(use_chinese(initial.language)),
             paused: AtomicBool::new(false),
-            tooltip_text: Mutex::new(String::from("LeopardWM - Tiling Window Manager")),
+            tooltip_text: Mutex::new(String::from(if use_chinese(initial.language) {
+                "LeopardWM - 平铺窗口管理器"
+            } else {
+                "LeopardWM - Tiling Window Manager"
+            })),
             active_border: AtomicBool::new(initial.active_border),
             focus_new_windows: AtomicBool::new(initial.focus_new_windows),
             focus_follows_mouse: AtomicBool::new(initial.focus_follows_mouse),
@@ -306,6 +330,9 @@ impl TrayManager {
     /// Sync quick-toggle check marks with the current config state.
     pub fn update_quick_toggles(&self, toggles: &QuickToggleState) {
         self.shared
+            .use_chinese
+            .store(use_chinese(toggles.language), Ordering::Relaxed);
+        self.shared
             .active_border
             .store(toggles.active_border, Ordering::Relaxed);
         self.shared
@@ -355,6 +382,17 @@ impl TrayManager {
             hotkey_mismatch,
             active_workspace,
         );
+        let tooltip = if self.shared.use_chinese.load(Ordering::Relaxed) {
+            format_tooltip_text_zh(
+                window_count,
+                monitor_count,
+                paused,
+                hotkey_mismatch,
+                active_workspace,
+            )
+        } else {
+            tooltip
+        };
         if let Ok(mut text) = self.shared.tooltip_text.lock() {
             *text = tooltip;
         }
@@ -449,6 +487,7 @@ fn run_tray_thread(
     shared: Arc<SharedState>,
     initial: QuickToggleState,
 ) {
+    let zh = use_chinese(initial.language);
     let thread_id = unsafe { win32_msg::GetCurrentThreadId() };
 
     // Enable dark mode for native context menus before any menu is created.
@@ -495,9 +534,17 @@ fn run_tray_thread(
                     win32_msg::WM_APP_UPDATE_PAUSE => {
                         let paused = shared.paused.load(Ordering::Relaxed);
                         let label = if paused {
-                            "Resume Tiling\tCtrl+Alt+P"
+                            if zh {
+                                "恢复平铺\tCtrl+Alt+P"
+                            } else {
+                                "Resume Tiling\tCtrl+Alt+P"
+                            }
                         } else {
-                            "Pause Tiling\tCtrl+Alt+P"
+                            if zh {
+                                "暂停平铺\tCtrl+Alt+P"
+                            } else {
+                                "Pause Tiling\tCtrl+Alt+P"
+                            }
                         };
                         items.pause_item.set_text(label);
                         continue;
@@ -540,9 +587,12 @@ fn run_tray_thread(
                     win32_msg::WM_APP_UPDATE_RELEASE_INFO => {
                         let label = match shared.available_update.lock() {
                             Ok(g) => match g.as_ref() {
+                                Some(tag) if zh => format!("有可用更新：{tag}"),
                                 Some(tag) => format!("Update available: {tag}"),
+                                None if zh => "检查更新".to_string(),
                                 None => "Check for Updates".to_string(),
                             },
+                            Err(_) if zh => "检查更新".to_string(),
                             Err(_) => "Check for Updates".to_string(),
                         };
                         items.update_item.set_text(label);
@@ -562,6 +612,8 @@ fn run_tray_thread(
 /// Build the tray icon with its context menu. Called on the message-loop
 /// thread so the hidden notification window belongs to that thread.
 fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayItems), TrayError> {
+    let zh = use_chinese(initial.language);
+    let tr = |en: &'static str, cn: &'static str| if zh { cn } else { en };
     let menu = Menu::new();
     let append = |item: &dyn tray_icon::menu::IsMenuItem| -> Result<(), TrayError> {
         menu.append(item)
@@ -581,7 +633,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     // Toggle Pause (first — most time-sensitive action)
     let toggle_pause = MenuItem::with_id(
         menu_ids::TOGGLE_PAUSE,
-        "Pause Tiling\tCtrl+Alt+P",
+        tr("Pause Tiling\tCtrl+Alt+P", "暂停平铺\tCtrl+Alt+P"),
         true,
         None,
     );
@@ -591,7 +643,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     // Quick toggles
     let active_border_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_ACTIVE_BORDER,
-        "Active Border",
+        tr("Active Border", "活动窗口边框"),
         true,
         initial.active_border,
         None,
@@ -600,7 +652,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
 
     let focus_new_windows_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_FOCUS_NEW_WINDOWS,
-        "Focus New Windows",
+        tr("Focus New Windows", "聚焦新窗口"),
         true,
         initial.focus_new_windows,
         None,
@@ -609,7 +661,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
 
     let focus_follows_mouse_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_FOCUS_FOLLOWS_MOUSE,
-        "Focus Follows Mouse",
+        tr("Focus Follows Mouse", "焦点跟随鼠标"),
         true,
         initial.focus_follows_mouse,
         None,
@@ -618,7 +670,10 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
 
     let hide_offscreen_taskbar_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_HIDE_OFFSCREEN_TASKBAR,
-        "Hide Off-Screen Taskbar Buttons",
+        tr(
+            "Hide Off-Screen Taskbar Buttons",
+            "隐藏屏幕外窗口的任务栏按钮",
+        ),
         true,
         initial.hide_offscreen_taskbar,
         None,
@@ -627,7 +682,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
 
     let auto_start_item = CheckMenuItem::with_id(
         menu_ids::TOGGLE_AUTO_START,
-        "Start with Windows",
+        tr("Start with Windows", "随 Windows 启动"),
         true,
         initial.auto_start,
         None,
@@ -635,24 +690,24 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     append(&auto_start_item)?;
 
     // Centering Mode submenu
-    let centering_sub = Submenu::new("Centering Mode", true);
+    let centering_sub = Submenu::new(tr("Centering Mode", "居中模式"), true);
     let centering_center_item = CheckMenuItem::with_id(
         menu_ids::CENTERING_CENTER,
-        "Center",
+        tr("Center", "居中"),
         true,
         initial.centering_mode == CENTERING_CENTER,
         None,
     );
     let centering_just_in_view_item = CheckMenuItem::with_id(
         menu_ids::CENTERING_JUST_IN_VIEW,
-        "Just in View",
+        tr("Just in View", "仅保持可见"),
         true,
         initial.centering_mode == CENTERING_JUST_IN_VIEW,
         None,
     );
     let centering_on_overflow_item = CheckMenuItem::with_id(
         menu_ids::CENTERING_ON_OVERFLOW,
-        "On Overflow",
+        tr("On Overflow", "溢出时居中"),
         true,
         initial.centering_mode == CENTERING_ON_OVERFLOW,
         None,
@@ -669,17 +724,17 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     append(&centering_sub)?;
 
     // New Window Placement submenu
-    let placement_sub = Submenu::new("New Window Placement", true);
+    let placement_sub = Submenu::new(tr("New Window Placement", "新窗口位置"), true);
     let placement_new_column_item = CheckMenuItem::with_id(
         menu_ids::PLACEMENT_NEW_COLUMN,
-        "New Column",
+        tr("New Column", "新列"),
         true,
         initial.placement_mode == PLACEMENT_NEW_COLUMN,
         None,
     );
     let placement_in_column_item = CheckMenuItem::with_id(
         menu_ids::PLACEMENT_IN_COLUMN,
-        "In Focused Column",
+        tr("In Focused Column", "放入焦点列"),
         true,
         initial.placement_mode == PLACEMENT_IN_COLUMN,
         None,
@@ -694,37 +749,45 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     append(&PredefinedMenuItem::separator())?;
 
     // Update checker — relabels itself when a newer release is detected.
-    let update_item = MenuItem::with_id(menu_ids::CHECK_UPDATES, "Check for Updates", true, None);
+    let update_item = MenuItem::with_id(
+        menu_ids::CHECK_UPDATES,
+        tr("Check for Updates", "检查更新"),
+        true,
+        None,
+    );
     append(&update_item)?;
     append(&PredefinedMenuItem::separator())?;
 
     // Configuration group
     append(&MenuItem::with_id(
         menu_ids::OPEN_CONFIG,
-        "Settings...",
+        tr("Settings...", "设置..."),
         true,
         None,
     ))?;
     append(&MenuItem::with_id(
         menu_ids::EDIT_CONFIG,
-        "Edit Config",
+        tr("Edit Config", "编辑配置"),
         true,
         None,
     ))?;
     append(&MenuItem::with_id(
         menu_ids::RELOAD,
-        "Reload Config\tCtrl+Alt+Shift+R",
+        tr(
+            "Reload Config\tCtrl+Alt+Shift+R",
+            "重新加载配置\tCtrl+Alt+Shift+R",
+        ),
         true,
         None,
     ))?;
     append(&PredefinedMenuItem::separator())?;
 
     // Troubleshooting submenu
-    let troubleshoot = Submenu::new("Troubleshooting", true);
+    let troubleshoot = Submenu::new(tr("Troubleshooting", "故障排除"), true);
     troubleshoot
         .append(&MenuItem::with_id(
             menu_ids::REFRESH,
-            "Refresh Windows\tCtrl+Alt+R",
+            tr("Refresh Windows\tCtrl+Alt+R", "刷新窗口\tCtrl+Alt+R"),
             true,
             None,
         ))
@@ -732,7 +795,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     troubleshoot
         .append(&MenuItem::with_id(
             menu_ids::VIEW_LOGS,
-            "View Logs",
+            tr("View Logs", "查看日志"),
             true,
             None,
         ))
@@ -740,7 +803,7 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     troubleshoot
         .append(&MenuItem::with_id(
             menu_ids::RELEASE_ALL_WINDOWS,
-            "Release All Windows",
+            tr("Release All Windows", "释放所有窗口"),
             true,
             None,
         ))
@@ -749,14 +812,22 @@ fn build_tray(initial: &QuickToggleState) -> Result<(tray_icon::TrayIcon, TrayIt
     append(&PredefinedMenuItem::separator())?;
 
     // Exit
-    append(&MenuItem::with_id(menu_ids::EXIT, "Exit", true, None))?;
+    append(&MenuItem::with_id(
+        menu_ids::EXIT,
+        tr("Exit", "退出"),
+        true,
+        None,
+    ))?;
 
     // Create the tray icon with a simple embedded icon
     let icon = create_default_icon()?;
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_tooltip("LeopardWM - Tiling Window Manager")
+        .with_tooltip(tr(
+            "LeopardWM - Tiling Window Manager",
+            "LeopardWM - 平铺窗口管理器",
+        ))
         .with_icon(icon)
         .build()
         .map_err(|e| TrayError::Build(e.to_string()))?;
@@ -822,6 +893,31 @@ pub fn format_tooltip_text(
         if registered < requested {
             tooltip.push_str(&format!(
                 "\nHotkeys: {}/{} ({} failed)",
+                registered,
+                requested,
+                requested - registered
+            ));
+        }
+    }
+    tooltip
+}
+
+fn format_tooltip_text_zh(
+    window_count: usize,
+    monitor_count: usize,
+    paused: bool,
+    hotkey_mismatch: Option<(usize, usize)>,
+    active_workspace: u8,
+) -> String {
+    let status = if paused { "已暂停" } else { "运行中" };
+    let mut tooltip = format!(
+        "LeopardWM - {}（工作区 {}，{} 个窗口，{} 台显示器）",
+        status, active_workspace, window_count, monitor_count
+    );
+    if let Some((registered, requested)) = hotkey_mismatch {
+        if registered < requested {
+            tooltip.push_str(&format!(
+                "\n快捷键：{}/{}（{} 个注册失败）",
                 registered,
                 requested,
                 requested - registered

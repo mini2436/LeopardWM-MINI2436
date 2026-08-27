@@ -3,7 +3,7 @@
 use crate::animation_worker;
 use crate::state::*;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{info, warn};
 
 pub(crate) fn reduce_motion_enabled(
     animations_enabled: bool,
@@ -52,7 +52,9 @@ impl AppState {
         if transition_complete {
             // Transition complete — move exiting windows offscreen.
             for wid in self.layout_transition_exit_windows_to_park() {
-                let _ = leopardwm_platform_win32::park_window_for_placement(wid);
+                if let Err(error) = leopardwm_platform_win32::park_window_for_placement(wid) {
+                    warn!(window_id = wid, %error, "Failed to park exiting workspace window");
+                }
             }
             self.complete_layout_transition();
             // The slide is done; cloak any settled off-workspace windows

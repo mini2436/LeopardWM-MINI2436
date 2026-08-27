@@ -264,28 +264,61 @@ pub fn park_window_for_placement(window_id: WindowId) -> Result<(), Win32Error> 
     let hwnd = window_id_to_hwnd(window_id)?;
     mark_placement_parked(window_id);
     apply_cloak_state(window_id);
-    let moved = unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            crate::MOVE_OFFSCREEN_SENTINEL_COORD,
-            crate::MOVE_OFFSCREEN_SENTINEL_COORD,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-    };
-    if let Err(error) = moved {
-        {
-            let mut cloaked = lock_cloaked();
-            if let Some(set) = cloaked.as_mut() {
-                set.remove(&window_id);
+    let mut last_error = None;
+    let mut parked = false;
+    let mut move_was_accepted = false;
+    // Some compositor-backed windows acknowledge SetWindowPos before their
+    // top-level rect has actually left the desktop. Verify the physical rect
+    // and retry a bounded number of times so the previous workspace cannot
+    // remain visible on top of the destination workspace.
+    for _ in 0..3 {
+        let moved = unsafe {
+            SetWindowPos(
+                hwnd,
+                None,
+                crate::MOVE_OFFSCREEN_SENTINEL_COORD,
+                crate::MOVE_OFFSCREEN_SENTINEL_COORD,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        if let Err(error) = moved {
+            last_error = Some(error.to_string());
+            continue;
+        }
+        move_was_accepted = true;
+        unsafe {
+            let _ = DwmFlush();
+            let mut rect = RECT::default();
+            if GetWindowRect(hwnd, &mut rect).is_ok()
+                && rect.left <= crate::MOVE_OFFSCREEN_SENTINEL_COORD
+                && rect.top <= crate::MOVE_OFFSCREEN_SENTINEL_COORD
+            {
+                parked = true;
+                break;
             }
         }
-        apply_cloak_state(window_id);
+        last_error = Some("window rectangle did not reach the off-screen sentinel".to_string());
+    }
+    if !parked {
+        // Roll ownership back only when Windows rejected every move. If at
+        // least one SetWindowPos succeeded but the rect stayed stale, retain
+        // placement ownership so the next visible placement can reliably
+        // recover the window instead of treating the sentinel as user state.
+        if !move_was_accepted {
+            {
+                let mut cloaked = lock_cloaked();
+                if let Some(set) = cloaked.as_mut() {
+                    set.remove(&window_id);
+                }
+            }
+            apply_cloak_state(window_id);
+        }
         return Err(Win32Error::SetPositionFailed(format!(
-            "Failed to park window {} for placement: {}",
-            window_id, error
+            "Failed to park window {} for placement after 3 attempts: {}",
+            window_id,
+            last_error.unwrap_or_else(|| "unknown error".to_string())
         )));
     }
     Ok(())
@@ -1333,20 +1366,20 @@ struct NudgeTarget {
 /// to the layout-requested size. The compositor sees two size-changes and
 /// rebuilds the swap chain, resolving the stuck-interim-size bug.
 fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
-    for t in targets {
+    fn nudge_once(t: &NudgeTarget) -> bool {
         unsafe {
             if !IsWindow(Some(t.hwnd)).as_bool() {
-                continue;
+                return false;
             }
         }
         let class = window_class_name(t.hwnd);
         if !STICKY_COMPOSITOR_CLASSES.iter().any(|c| *c == class) {
-            continue;
+            return false;
         }
         let flags = SWP_NOZORDER | SWP_NOACTIVATE;
         unsafe {
             if SetWindowPos(t.hwnd, None, t.x, t.y, t.w - 1, t.h, flags).is_err() {
-                continue;
+                return false;
             }
             // Re-validate the HWND between the pair: the first SetWindowPos
             // pumps messages on the target thread and can cause the window to
@@ -1356,10 +1389,10 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
             // fails the target is left at w-1 rather than risk resizing the
             // wrong window — next apply pass will correct it.
             if !IsWindow(Some(t.hwnd)).as_bool() {
-                continue;
+                return false;
             }
             if window_class_name(t.hwnd) != class {
-                continue;
+                return false;
             }
             if let Err(e) = SetWindowPos(t.hwnd, None, t.x, t.y, t.w, t.h, flags) {
                 // Restore failed — window is stranded at w-1 (1px narrower)
@@ -1369,7 +1402,7 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
                     "Nudge restore SetWindowPos failed for hwnd={:?} class={} — window left at w-1 until next apply: {:?}",
                     t.hwnd, class, e
                 );
-                continue;
+                return false;
             }
         }
         tracing::debug!(
@@ -1377,6 +1410,34 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
             class,
             t.hwnd
         );
+        true
+    }
+
+    let affected: Vec<&NudgeTarget> = targets.iter().filter(|target| nudge_once(target)).collect();
+    if affected.is_empty() {
+        return;
+    }
+
+    // Let the application's UI/compositor thread observe the first real size
+    // delta, then repeat once. Rapid focus scrolling can otherwise coalesce
+    // the first pair with the landing resize and retain an interim swap-chain.
+    unsafe {
+        let _ = DwmFlush();
+    }
+    std::thread::sleep(std::time::Duration::from_millis(16));
+    for target in affected {
+        unsafe {
+            let mut rect = RECT::default();
+            if GetWindowRect(target.hwnd, &mut rect).is_err()
+                || rect.left != target.x
+                || rect.top != target.y
+                || rect.right - rect.left != target.w
+                || rect.bottom - rect.top != target.h
+            {
+                continue;
+            }
+        }
+        let _ = nudge_once(target);
     }
 }
 

@@ -188,6 +188,67 @@ impl Default for Workspace {
 }
 
 impl Workspace {
+    /// Append all content from another workspace while preserving column
+    /// composition, floating geometry, minimization and size constraints.
+    /// Used when the configured workspace count is reduced.
+    pub fn append_workspace(&mut self, mut source: Workspace) {
+        let accepted: HashSet<WindowId> = source
+            .all_window_ids()
+            .into_iter()
+            .filter(|wid| !self.contains_window(*wid))
+            .collect();
+
+        for column in source.columns.drain(..) {
+            if column.windows().iter().all(|wid| accepted.contains(wid)) {
+                self.columns.push(column);
+            }
+        }
+        self.floating_windows.extend(
+            source
+                .floating_windows
+                .drain(..)
+                .filter(|floating| accepted.contains(&floating.id)),
+        );
+        self.minimized_windows.extend(
+            source
+                .minimized_windows
+                .drain()
+                .filter(|wid| accepted.contains(wid)),
+        );
+        self.window_min_widths.extend(
+            source
+                .window_min_widths
+                .drain()
+                .filter(|(wid, _)| accepted.contains(wid)),
+        );
+        self.window_min_heights.extend(
+            source
+                .window_min_heights
+                .drain()
+                .filter(|(wid, _)| accepted.contains(wid)),
+        );
+        self.pending_min_size_clears.extend(
+            source
+                .pending_min_size_clears
+                .drain()
+                .filter(|wid| accepted.contains(wid)),
+        );
+        self.float_origin_column.extend(
+            source
+                .float_origin_column
+                .drain()
+                .filter(|(wid, _)| accepted.contains(wid)),
+        );
+        if self.fullscreen_window.is_none()
+            && source
+                .fullscreen_window
+                .is_some_and(|wid| accepted.contains(&wid))
+        {
+            self.fullscreen_window = source.fullscreen_window;
+        }
+        self.clamp_focus_indices();
+    }
+
     /// Create a new empty workspace with default settings.
     pub fn new() -> Self {
         Self::default()
