@@ -1471,6 +1471,51 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
         true
     }
 
+    fn settle_geometry_if_needed(t: &NudgeTarget) -> bool {
+        unsafe {
+            if !IsWindow(Some(t.hwnd)).as_bool() {
+                return false;
+            }
+        }
+        let class = window_class_name(t.hwnd);
+        if !needs_delayed_geometry_settle(&class) {
+            return false;
+        }
+
+        let mut actual = RECT::default();
+        if unsafe { GetWindowRect(t.hwnd, &mut actual) }.is_err() {
+            return false;
+        }
+        let expected = RECT {
+            left: t.x,
+            top: t.y,
+            right: t.x + t.w,
+            bottom: t.y + t.h,
+        };
+        if actual == expected {
+            return true;
+        }
+
+        let flags = SWP_NOZORDER | SWP_NOACTIVATE;
+        if unsafe { SetWindowPos(t.hwnd, None, t.x, t.y, t.w, t.h, flags) }.is_err() {
+            return false;
+        }
+        tracing::debug!(
+            "Re-asserted delayed WinUI geometry (class={}, hwnd={:?}, actual=({},{} {}x{}), expected=({},{} {}x{}))",
+            class,
+            t.hwnd,
+            actual.left,
+            actual.top,
+            actual.right - actual.left,
+            actual.bottom - actual.top,
+            t.x,
+            t.y,
+            t.w,
+            t.h
+        );
+        true
+    }
+
     let affected: Vec<(&NudgeTarget, bool)> = targets
         .iter()
         .filter_map(|target| {
@@ -1506,9 +1551,23 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
     // classes, so routine focus/layout refreshes pay no delay.
     if affected.iter().any(|(_, delayed)| *delayed) {
         std::thread::sleep(std::time::Duration::from_millis(48));
+        for (target, delayed) in &affected {
+            if *delayed {
+                let _ = nudge_once(target);
+            }
+        }
+
+        // Settings replaces its full-screen launch surface with the real
+        // ApplicationFrameWindow late in startup. That shell-owned placement
+        // can arrive after the compositor ticks above and restore the old
+        // right-hand rectangle. Check the actual HWND rectangle once the
+        // daemon's 250 ms location-change suppression window has elapsed and
+        // re-assert only mismatching WinUI windows. Unlike nudge_once this
+        // does not introduce a 1 px resize when the window is already correct.
+        std::thread::sleep(std::time::Duration::from_millis(240));
         for (target, delayed) in affected {
             if delayed {
-                let _ = nudge_once(target);
+                let _ = settle_geometry_if_needed(target);
             }
         }
     }

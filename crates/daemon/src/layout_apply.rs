@@ -551,7 +551,11 @@ impl AppState {
         let bypass_fast_path = self.injected_apply_placements_behavior.is_some();
         #[cfg(not(test))]
         let bypass_fast_path = false;
-        if placements_unchanged && !bypass_fast_path {
+        if should_take_apply_fast_path(
+            placements_unchanged,
+            bypass_fast_path,
+            self.post_animation_nudge_pending,
+        ) {
             self.applying_layout = false;
             return Ok(());
         }
@@ -1054,6 +1058,39 @@ impl AppState {
         // Signature dedup + the background debounce coalesce animation
         // frames and rapid structural changes into at most ~one write/sec.
         self.request_save_if_changed();
+    }
+}
+
+/// A post-animation landing repair must always reach the placement worker.
+/// The layout cache records requested geometry, not the rectangle a WinUI
+/// host may restore after accepting that request, so treating an unchanged
+/// request as proof that the real window is settled can strand it beside the
+/// border until another layout event occurs.
+fn should_take_apply_fast_path(
+    placements_unchanged: bool,
+    bypass_fast_path: bool,
+    landing_repair_pending: bool,
+) -> bool {
+    placements_unchanged && !bypass_fast_path && !landing_repair_pending
+}
+
+#[cfg(test)]
+mod apply_fast_path_tests {
+    use super::should_take_apply_fast_path;
+
+    #[test]
+    fn unchanged_layout_uses_fast_path_during_routine_refresh() {
+        assert!(should_take_apply_fast_path(true, false, false));
+    }
+
+    #[test]
+    fn injected_worker_bypasses_fast_path() {
+        assert!(!should_take_apply_fast_path(true, true, false));
+    }
+
+    #[test]
+    fn animation_landing_repair_bypasses_fast_path() {
+        assert!(!should_take_apply_fast_path(true, false, true));
     }
 }
 
