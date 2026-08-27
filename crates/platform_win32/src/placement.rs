@@ -1418,6 +1418,13 @@ struct NudgeTarget {
     h: i32,
 }
 
+fn rect_matches_nudge_target(rect: RECT, target: &NudgeTarget) -> bool {
+    (rect.left - target.x).abs() <= 2
+        && (rect.top - target.y).abs() <= 2
+        && (rect.right - rect.left - target.w).abs() <= 2
+        && (rect.bottom - rect.top - target.h).abs() <= 2
+}
+
 /// Send a (w-1 -> w) synchronous SetWindowPos pair to each entry whose window
 /// class matches a known sticky-compositor class. The 1px shrink forces a real
 /// size delta through the message pump; the immediate restore returns the rect
@@ -1482,36 +1489,74 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
             return false;
         }
 
-        let mut actual = RECT::default();
-        if unsafe { GetWindowRect(t.hwnd, &mut actual) }.is_err() {
-            return false;
+        let was_placement_parked = is_placement_parked(t.hwnd.0 as u64);
+        if was_placement_parked && !ghost_cloaked_contains(t.hwnd.0 as u64) {
+            // finalize_visible_uncloak deliberately retains ownership when the
+            // first synchronous SetWindowPos has not physically landed yet.
+            // Reveal again for this delayed WinUI retry; ownership is removed
+            // only after GetWindowRect confirms the destination below.
+            unsafe { dwm_set_cloak(t.hwnd, false) };
         }
-        let expected = RECT {
-            left: t.x,
-            top: t.y,
-            right: t.x + t.w,
-            bottom: t.y + t.h,
-        };
-        if actual == expected {
-            return true;
+
+        let mut before = RECT::default();
+        if unsafe { GetWindowRect(t.hwnd, &mut before) }.is_err() {
+            if was_placement_parked {
+                apply_cloak_state(t.hwnd.0 as u64);
+            }
+            return false;
         }
 
         let flags = SWP_NOZORDER | SWP_NOACTIVATE;
-        if unsafe { SetWindowPos(t.hwnd, None, t.x, t.y, t.w, t.h, flags) }.is_err() {
-            return false;
+        if !rect_matches_nudge_target(before, t) {
+            let mut landed = false;
+            for _ in 0..3 {
+                if unsafe { SetWindowPos(t.hwnd, None, t.x, t.y, t.w, t.h, flags) }.is_err() {
+                    continue;
+                }
+                unsafe {
+                    let _ = DwmFlush();
+                }
+                let mut after = RECT::default();
+                if unsafe { GetWindowRect(t.hwnd, &mut after) }.is_ok()
+                    && rect_matches_nudge_target(after, t)
+                {
+                    landed = true;
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            if !landed {
+                if was_placement_parked {
+                    apply_cloak_state(t.hwnd.0 as u64);
+                }
+                return false;
+            }
+        }
+
+        if was_placement_parked {
+            let released = {
+                let mut cloaked = lock_cloaked();
+                cloaked
+                    .as_mut()
+                    .is_some_and(|set| set.remove(&(t.hwnd.0 as u64)))
+            };
+            if released {
+                apply_cloak_state(t.hwnd.0 as u64);
+            }
         }
         tracing::debug!(
-            "Re-asserted delayed WinUI geometry (class={}, hwnd={:?}, actual=({},{} {}x{}), expected=({},{} {}x{}))",
+            "Settled delayed WinUI geometry (class={}, hwnd={:?}, before=({},{} {}x{}), expected=({},{} {}x{}), released_park={})",
             class,
             t.hwnd,
-            actual.left,
-            actual.top,
-            actual.right - actual.left,
-            actual.bottom - actual.top,
+            before.left,
+            before.top,
+            before.right - before.left,
+            before.bottom - before.top,
             t.x,
             t.y,
             t.w,
-            t.h
+            t.h,
+            was_placement_parked
         );
         true
     }
