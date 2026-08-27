@@ -359,6 +359,35 @@ fn uncloak_all_tracked() {
 /// Global set of window IDs currently cloaked by the placement system.
 static GLOBAL_CLOAKED: Mutex<Option<HashSet<WindowId>>> = Mutex::new(None);
 
+/// Latest layout generation touching each delayed WinUI host. Background
+/// settle probes carry the generation they were created for and stop as soon
+/// as a newer placement supersedes their target rectangle.
+static DELAYED_GEOMETRY_GENERATIONS: Mutex<Option<HashMap<WindowId, u64>>> = Mutex::new(None);
+static DELAYED_GEOMETRY_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+fn refresh_delayed_geometry_generation(entries: &[DeferEntry]) {
+    let mut generations = DELAYED_GEOMETRY_GENERATIONS
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex);
+    let generations = generations.get_or_insert_with(HashMap::new);
+    for entry in entries {
+        if needs_delayed_geometry_settle(&window_class_name(entry.hwnd)) {
+            let generation = DELAYED_GEOMETRY_GENERATION_COUNTER
+                .fetch_add(1, AtomicOrdering::Relaxed)
+                .wrapping_add(1);
+            generations.insert(entry.window_id, generation);
+        }
+    }
+}
+
+fn delayed_geometry_generation(window_id: WindowId) -> Option<u64> {
+    DELAYED_GEOMETRY_GENERATIONS
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+        .as_ref()
+        .and_then(|generations| generations.get(&window_id).copied())
+}
+
 /// Cache of last-applied window placements and border insets.
 ///
 /// The position cache skips redundant SetWindowPos calls during animations.
@@ -544,6 +573,7 @@ fn apply_placements_inner(
         high_contrast,
         force_positioning,
     );
+    refresh_delayed_geometry_generation(&entries);
     // Reveal before positioning so DWM composes returning windows at their new
     // rect, but keep placement ownership until the move actually succeeds.
     prepare_visible_uncloak(&entries);
@@ -996,6 +1026,13 @@ pub fn clear_suspected_oversize(window_id: WindowId) {
     if let Some(map) = guard.as_mut() {
         map.remove(&window_id);
     }
+    if let Some(generations) = DELAYED_GEOMETRY_GENERATIONS
+        .lock()
+        .unwrap_or_else(crate::recover_poisoned_mutex)
+        .as_mut()
+    {
+        generations.remove(&window_id);
+    }
 }
 
 const VISIBLE_SIZE_TOLERANCE: i32 = 2;
@@ -1410,6 +1447,7 @@ fn window_class_name(hwnd: HWND) -> String {
 }
 
 /// Position data passed to the nudge helper.
+#[derive(Clone, Copy)]
 struct NudgeTarget {
     hwnd: HWND,
     x: i32,
@@ -1602,17 +1640,34 @@ fn nudge_sticky_compositor_windows(targets: &[NudgeTarget]) {
             }
         }
 
-        // Settings replaces its full-screen launch surface with the real
-        // ApplicationFrameWindow late in startup. That shell-owned placement
-        // can arrive after the compositor ticks above and restore the old
-        // right-hand rectangle. Check the actual HWND rectangle once the
-        // daemon's 250 ms location-change suppression window has elapsed and
-        // re-assert only mismatching WinUI windows. Unlike nudge_once this
-        // does not introduce a 1 px resize when the window is already correct.
-        std::thread::sleep(std::time::Duration::from_millis(240));
+        // Settings replaces its launch surface with the real
+        // ApplicationFrameWindow in several shell-owned phases. Observed
+        // launch placement restores can arrive around 0.5 s and again after
+        // 1 s, so one in-worker correction is not enough. Run bounded probes
+        // in the background; each probe verifies its layout generation before
+        // acting, so a later scroll/workspace/layout change cancels stale work.
         for (target, delayed) in affected {
             if delayed {
-                let _ = settle_geometry_if_needed(target);
+                let window_id = target.hwnd.0 as u64;
+                let (x, y, w, h) = (target.x, target.y, target.w, target.h);
+                let Some(generation) = delayed_geometry_generation(window_id) else {
+                    continue;
+                };
+                let _ = std::thread::Builder::new()
+                    .name("leopardwm-winui-settle".to_string())
+                    .spawn(move || {
+                        for delay_ms in [240, 300, 400, 500, 600] {
+                            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                            if delayed_geometry_generation(window_id) != Some(generation) {
+                                return;
+                            }
+                            let Ok(hwnd) = window_id_to_hwnd(window_id) else {
+                                return;
+                            };
+                            let target = NudgeTarget { hwnd, x, y, w, h };
+                            let _ = settle_geometry_if_needed(&target);
+                        }
+                    });
             }
         }
     }
