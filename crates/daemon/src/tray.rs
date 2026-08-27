@@ -1031,8 +1031,11 @@ fn workspace_icon_rgba(workspace: u8) -> Result<Vec<u8>, TrayError> {
 
     let mut rgba = vec![0u8; WORKSPACE_ICON_SIZE * WORKSPACE_ICON_SIZE * 4];
     let center = (WORKSPACE_ICON_SIZE as f32 - 1.0) / 2.0;
-    let outer_radius = 14.5f32;
-    let inner_radius = 12.3f32;
+    // Fill virtually the entire HICON canvas. Windows still owns the fixed
+    // notification-area slot, but minimizing transparent canvas padding makes
+    // the circle appear at the largest size that slot allows.
+    let outer_radius = 15.75f32;
+    let inner_radius = 13.4f32;
 
     for y in 0..WORKSPACE_ICON_SIZE {
         for x in 0..WORKSPACE_ICON_SIZE {

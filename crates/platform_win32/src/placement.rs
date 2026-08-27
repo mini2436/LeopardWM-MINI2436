@@ -544,10 +544,11 @@ fn apply_placements_inner(
         high_contrast,
         force_positioning,
     );
-    // Uncloak before positioning so DWM composites returning windows at their
-    // new rect before the landing measurement. The retry can repeat this safely.
-    uncloak_becoming_visible(&entries);
+    // Reveal before positioning so DWM composes returning windows at their new
+    // rect, but keep placement ownership until the move actually succeeds.
+    prepare_visible_uncloak(&entries);
     let (applied, failed_window_ids) = position_entries(&entries);
+    finalize_visible_uncloak(&entries, &failed_window_ids);
 
     // On the synchronous landing pass, compare the DWM visible measurement to
     // both the layout request and the expanded SetWindowPos frame request. A
@@ -736,6 +737,12 @@ fn build_defer_entries(
             continue;
         }
         if !force_positioning
+            // A direct workspace-transition park moves the HWND outside the
+            // animation worker, so its cached layout rect can still match even
+            // though the physical window is at the sentinel. Placement
+            // ownership is authoritative: a parked window must receive a real
+            // SetWindowPos before the cache may skip it.
+            && !is_placement_parked(placement.window_id)
             && cache.as_deref().is_some_and(|cache| {
                 cache.positions.get(&placement.window_id)
                     == Some(&(placement.rect, placement.visibility))
@@ -813,22 +820,53 @@ fn build_defer_entries(
     (entries, skipped, maximized_skipped_window_ids)
 }
 
-/// Uncloak entries becoming visible and drop them from the tracking set.
-fn uncloak_becoming_visible(entries: &[DeferEntry]) {
-    let to_consider: Vec<WindowId> = {
+/// Temporarily reveal placement-parked entries before moving them, but retain
+/// logical ownership until SetWindowPos succeeds. Removing the tracking bit
+/// before positioning used to strand Settings/ApplicationFrameWindow at the
+/// sentinel when a move was delayed or rejected: the cache then believed its
+/// target rect had already landed and every later animation frame skipped it.
+fn prepare_visible_uncloak(entries: &[DeferEntry]) {
+    for entry in entries.iter().filter(|entry| {
+        entry.visibility == Visibility::Visible
+            && is_placement_parked(entry.window_id)
+            && !ghost_cloaked_contains(entry.window_id)
+    }) {
+        unsafe { dwm_set_cloak(entry.hwnd, false) };
+    }
+}
+
+/// Commit the visible return only for windows that were physically positioned.
+/// Failed windows retain placement ownership and are re-cloaked so a later
+/// frame is forced to retry instead of exposing an invisible sentinel window.
+fn finalize_visible_uncloak(entries: &[DeferEntry], failed_window_ids: &HashSet<WindowId>) {
+    let successful: Vec<WindowId> = entries
+        .iter()
+        .filter(|entry| {
+            entry.visibility == Visibility::Visible
+                && !failed_window_ids.contains(&entry.window_id)
+                && is_placement_parked(entry.window_id)
+                && unsafe {
+                    let mut rect = RECT::default();
+                    GetWindowRect(entry.hwnd, &mut rect).is_ok()
+                        && (rect.left - entry.x).abs() <= 2
+                        && (rect.top - entry.y).abs() <= 2
+                }
+        })
+        .map(|entry| entry.window_id)
+        .collect();
+    {
         let mut cloaked = lock_cloaked();
-        if let Some(ref mut set) = *cloaked {
-            entries
-                .iter()
-                .filter(|e| e.visibility == Visibility::Visible && set.remove(&e.window_id))
-                .map(|e| e.window_id)
-                .collect()
-        } else {
-            Vec::new()
+        if let Some(set) = cloaked.as_mut() {
+            for window_id in &successful {
+                set.remove(window_id);
+            }
         }
-    };
-    for wid in to_consider {
-        apply_cloak_state(wid);
+    }
+    for entry in entries
+        .iter()
+        .filter(|entry| entry.visibility == Visibility::Visible)
+    {
+        apply_cloak_state(entry.window_id);
     }
 }
 
