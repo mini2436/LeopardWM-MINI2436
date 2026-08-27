@@ -5132,6 +5132,31 @@ fn test_cmd_reload() {
 }
 
 #[test]
+fn test_focus_left_right_commands_wrap_across_strip_edges() {
+    let mut state = AppState::new_with_config(test_config(), test_monitors());
+    state.paused = true;
+    let ws = state.focused_workspace_mut().unwrap();
+    ws.insert_window(100, Some(800)).unwrap();
+    ws.insert_window(200, Some(800)).unwrap();
+    assert_eq!(ws.focused_column_index(), 1);
+
+    assert_eq!(
+        state.handle_command(IpcCommand::FocusRight),
+        IpcResponse::Ok
+    );
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(100)
+    );
+
+    assert_eq!(state.handle_command(IpcCommand::FocusLeft), IpcResponse::Ok);
+    assert_eq!(
+        state.focused_workspace().unwrap().focused_window(),
+        Some(200)
+    );
+}
+
+#[test]
 fn test_cmd_query_all_windows() {
     let mut state = AppState::new_with_config(test_config(), test_monitors());
     let resp = state.handle_command(IpcCommand::QueryAllWindows);

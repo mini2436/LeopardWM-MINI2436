@@ -168,8 +168,8 @@ impl AppState {
     fn focus_in_fullscreen(&mut self, cmd: &IpcCommand) -> IpcResponse {
         let resp = self.execute_workspace_command(false, true, |ws, vw| {
             match cmd {
-                IpcCommand::FocusLeft => ws.focus_left(),
-                IpcCommand::FocusRight => ws.focus_right(),
+                IpcCommand::FocusLeft => ws.focus_left_wrapping(),
+                IpcCommand::FocusRight => ws.focus_right_wrapping(),
                 IpcCommand::FocusUp => ws.focus_up(),
                 IpcCommand::FocusDown => ws.focus_down(),
                 IpcCommand::FocusNext => ws.focus_next(),
@@ -268,12 +268,12 @@ impl AppState {
             .then_some(self.previous_focused_hwnd);
         let resp = match cmd {
             IpcCommand::FocusLeft => self.execute_workspace_command(false, true, |ws, vw| {
-                ws.focus_left();
+                ws.focus_left_wrapping();
                 ws.ensure_focused_visible_animated(vw);
                 info!("Focus left -> column {}", ws.focused_column_index());
             }),
             IpcCommand::FocusRight => self.execute_workspace_command(false, true, |ws, vw| {
-                ws.focus_right();
+                ws.focus_right_wrapping();
                 ws.ensure_focused_visible_animated(vw);
                 info!("Focus right -> column {}", ws.focused_column_index());
             }),

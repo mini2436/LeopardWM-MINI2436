@@ -383,6 +383,26 @@ impl Workspace {
         );
     }
 
+    /// Move focus left, wrapping from the first visible column to the last.
+    /// All-minimized columns are skipped by the same rules as `focus_left`.
+    pub fn focus_left_wrapping(&mut self) {
+        let before = self.focused_column;
+        self.focus_left();
+        if self.focused_column == before {
+            self.focus_end();
+        }
+    }
+
+    /// Move focus right, wrapping from the last visible column to the first.
+    /// All-minimized columns are skipped by the same rules as `focus_right`.
+    pub fn focus_right_wrapping(&mut self) {
+        let before = self.focused_column;
+        self.focus_right();
+        if self.focused_column == before {
+            self.focus_start();
+        }
+    }
+
     /// Move focus to the first (leftmost) column that has a visible window.
     pub fn focus_start(&mut self) {
         self.focus_to_strip_end(false);

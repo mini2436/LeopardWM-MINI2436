@@ -4105,6 +4105,30 @@ mod tests {
     }
 
     #[test]
+    fn test_horizontal_focus_wrapping_skips_minimized_columns() {
+        let mut ws = Workspace::new();
+        ws.insert_window(1, Some(400)).unwrap();
+        ws.insert_window(2, Some(400)).unwrap();
+        ws.insert_window(3, Some(400)).unwrap();
+
+        // Starts on the final column and wraps right to the first.
+        ws.focus_right_wrapping();
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(1));
+
+        // The final column is minimized, so wrapping left skips it and lands
+        // on the nearest visible column scanning inward from the far edge.
+        ws.mark_minimized(3);
+        ws.focus_left_wrapping();
+        assert_eq!(ws.focused_column_index(), 1);
+        assert_eq!(ws.focused_window(), Some(2));
+
+        ws.focus_right_wrapping();
+        assert_eq!(ws.focused_column_index(), 0);
+        assert_eq!(ws.focused_window(), Some(1));
+    }
+
+    #[test]
     fn test_append_workspace_preserves_columns_and_floating_windows() {
         let mut destination = Workspace::with_gaps(8, 8);
         destination.insert_window(1, Some(400)).unwrap();
